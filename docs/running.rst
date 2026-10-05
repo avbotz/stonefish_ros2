@@ -19,6 +19,11 @@ where:
 * widnow_res - the resolution of the main simulator window [px]
 * rendering_quality - the quality of the rendering: low, medium or high.
 
+The simulation clock of both simulators is controlled with the following ROS parameters (also exposed as arguments of the provided launch files):
+
+* publish_clock - if ``true``, the simulation time is published on the ``/clock`` topic and used to stamp all messages, so that other nodes can follow it with ``use_sim_time:=true`` (default: ``false``, messages are stamped with the system time)
+* realtime_factor - the speed of the simulation relative to real time, e.g. 0.5 runs at half speed (default: 1.0); it can also be changed while the simulation is running, using ``ros2 param set``
+
 Another option is to include the provided ``launch/stonefish_simulator.launch.py`` file in your own launch file. It is necessary to override the default arguments. See an example below:
 
 .. code-block:: python

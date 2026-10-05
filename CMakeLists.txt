@@ -23,6 +23,7 @@ find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(rosgraph_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -75,6 +76,7 @@ ament_target_dependencies(stonefish_ros2_interface PUBLIC
  nav_msgs
  visualization_msgs
  sensor_msgs
+ rosgraph_msgs
  pcl_conversions
  image_transport
  tf2
@@ -91,6 +93,7 @@ ament_export_dependencies(
   nav_msgs
   visualization_msgs
   sensor_msgs
+  rosgraph_msgs
   pcl_conversions
   image_transport
   tf2
