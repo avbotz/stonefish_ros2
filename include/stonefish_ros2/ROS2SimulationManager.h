@@ -65,7 +65,7 @@ namespace sf
     class OpticalFlowCamera;
     class SegmentationCamera;
     class EventBasedCamera;
-    class Multibeam2;
+    class Lidar;
     class FLS;
     class SSS;
     class MSIS;
@@ -112,7 +112,7 @@ namespace sf
         virtual void OpticalFlowCameraImageReady(OpticalFlowCamera* cam);
         virtual void SegmentationCameraImageReady(SegmentationCamera* cam);
         virtual void EventBasedCameraOutputReady(EventBasedCamera* cam);
-		virtual void Multibeam2ScanReady(Multibeam2* mb);
+		virtual void LidarScanReady(Lidar* mb);
 		virtual void FLSScanReady(FLS* fls);
 		virtual void SSSScanReady(SSS* sss);
 		virtual void MSISScanReady(MSIS* msis);

@@ -65,6 +65,9 @@
 #include <Stonefish/entities/forcefields/Uniform.h>
 #include <Stonefish/entities/forcefields/Jet.h>
 #include <Stonefish/actuators/Actuator.h>
+#include <Stonefish/actuators/LinkActuator.h>
+#include <Stonefish/actuators/JointActuator.h>
+#include <Stonefish/actuators/Push.h>
 #include <Stonefish/actuators/Light.h>
 #include <Stonefish/actuators/Motor.h>
 #include <Stonefish/actuators/Servo.h>
@@ -80,7 +83,7 @@
 #include <Stonefish/sensors/vision/OpticalFlowCamera.h>
 #include <Stonefish/sensors/vision/SegmentationCamera.h>
 #include <Stonefish/sensors/vision/EventBasedCamera.h>
-#include <Stonefish/sensors/vision/Multibeam2.h>
+#include <Stonefish/sensors/vision/Lidar.h>
 #include <Stonefish/sensors/vision/FLS.h>
 #include <Stonefish/sensors/vision/SSS.h>
 #include <Stonefish/sensors/vision/MSIS.h>
@@ -192,9 +195,10 @@ bool ROS2ScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, s
     return ScenarioParser::PreProcess(root, args);
 }
 
-VelocityField* ROS2ScenarioParser::ParseVelocityField(XMLElement* element)
+std::unique_ptr<VelocityField> ROS2ScenarioParser::ParseVelocityField(XMLElement* element)
 {
-    VelocityField* vf = ScenarioParser::ParseVelocityField(element);
+    std::unique_ptr<VelocityField> vfPtr = ScenarioParser::ParseVelocityField(element);
+    VelocityField* vf = vfPtr.get();
     if(vf != nullptr)
     {
         ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
@@ -235,7 +239,7 @@ VelocityField* ROS2ScenarioParser::ParseVelocityField(XMLElement* element)
                 break;
         }
     }
-    return vf;
+    return vfPtr;
 }
 
 bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
@@ -264,31 +268,43 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
     Actuator* act;
     while((act = robot->getActuator(aID++)) != NULL)
     {
-        switch(act->getType())
+        if(act->getType() == ActuatorType::LINK)
         {
-            case ActuatorType::SIMPLE_THRUSTER:
-            case ActuatorType::THRUSTER:
-                ++nThrusters;
-                break;
+            switch(static_cast<LinkActuator*>(act)->getLinkActuatorType())
+            {
+                case LinkActuatorType::SIMPLE_THRUSTER:
+                case LinkActuatorType::THRUSTER:
+                    ++nThrusters;
+                    break;
 
-            case ActuatorType::PROPELLER:
-                ++nPropellers;
-                break;
+                case LinkActuatorType::PROPELLER:
+                    ++nPropellers;
+                    break;
 
-            case ActuatorType::RUDDER:
-                ++nRudders;
-                break;
+                case LinkActuatorType::RUDDER:
+                    ++nRudders;
+                    break;
 
-            case ActuatorType::MOTOR:
-                ++nMotors;
-                break;
+                default:
+                    break;
+            }
+        }
+        else
+        {
+            switch(static_cast<JointActuator*>(act)->getJointActuatorType())
+            {
+                case JointActuatorType::MOTOR:
+                case JointActuatorType::DCMOTOR:
+                    ++nMotors;
+                    break;
 
-            case ActuatorType::SERVO:
-                ++nServos;
-                break;
+                case JointActuatorType::SERVO:
+                    ++nServos;
+                    break;
 
-            default:
-                break;
+                default:
+                    break;
+            }
         }
     }
 
@@ -348,7 +364,8 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
             aID = 0;
             while((act = robot->getActuator(aID++)) != nullptr)
             {
-                if(act->getType() == ActuatorType::SERVO)
+                if(act->getType() == ActuatorType::JOINT
+                   && static_cast<JointActuator*>(act)->getJointActuatorType() == JointActuatorType::SERVO)
                     rosRobot->servoSetpoints_[((Servo*)act)->getJointName()] = std::pair(ServoControlMode::VELOCITY, Scalar(0));
             }
         }
@@ -507,11 +524,12 @@ bool ROS2ScenarioParser::ParseAnimated(XMLElement* element)
     return true;
 }
 
-Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::string& namePrefix)
+std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::string& namePrefix)
 {
-    Actuator* act = ScenarioParser::ParseActuator(element, namePrefix);
+    std::unique_ptr<Actuator, ActuatorDeleter> actPtr = ScenarioParser::ParseActuator(element, namePrefix);
+    Actuator* act = actPtr.get();
     
-    if(act != nullptr)
+    if(act != nullptr && act->getType() == ActuatorType::LINK) //Only link actuators are handled here
     {
         ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
         std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();
@@ -519,10 +537,11 @@ Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::stri
         std::map<std::string, rclcpp::ServiceBase::SharedPtr>& srvs = sim->getServices();
         std::string actuatorName = act->getName();
         XMLElement* item;
+        LinkActuatorType linkType = static_cast<LinkActuator*>(act)->getLinkActuatorType();
         //Actuator specific handling
-        switch(act->getType())
+        switch(linkType)
         {
-            case ActuatorType::SIMPLE_THRUSTER:
+            case LinkActuatorType::SIMPLE_THRUSTER:
             {
                 const char* subTopic = nullptr;
                 if((item = element->FirstChildElement("ros_subscriber")) != nullptr
@@ -548,7 +567,7 @@ Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::stri
             }
                 break;
 
-            case ActuatorType::THRUSTER:
+            case LinkActuatorType::THRUSTER:
             {
                 const char* subTopic = nullptr;
                 if((item = element->FirstChildElement("ros_subscriber")) != nullptr
@@ -574,7 +593,7 @@ Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::stri
             }
                 break;
 
-            case ActuatorType::PROPELLER:
+            case LinkActuatorType::PROPELLER:
             {
                 const char* subTopic = nullptr;
                 if((item = element->FirstChildElement("ros_subscriber")) != nullptr
@@ -594,7 +613,7 @@ Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::stri
             }
                 break;
 
-            case ActuatorType::PUSH:
+            case LinkActuatorType::PUSH:
             {
                 const char* subTopic = nullptr;
                 if((item = element->FirstChildElement("ros_subscriber")) != nullptr
@@ -614,7 +633,7 @@ Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::stri
             }
                 break;
 
-            case ActuatorType::VBS:
+            case LinkActuatorType::VBS:
             {
                 const char* pubTopic = nullptr;
                 const char* subTopic = nullptr;
@@ -633,7 +652,7 @@ Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::stri
             }
                 break;
 
-            case ActuatorType::SUCTION_CUP:
+            case LinkActuatorType::SUCTION_CUP:
             {
                 const char* pubTopic = nullptr;
                 const char* srvTopic = nullptr;
@@ -656,13 +675,13 @@ Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::stri
                 break;
         }
         //Handling of online origin updates
-        switch(act->getType())
+        switch(linkType)
         {
-            case ActuatorType::PUSH:
-            case ActuatorType::SIMPLE_THRUSTER:
-            case ActuatorType::THRUSTER:
-            case ActuatorType::PROPELLER:
-            case ActuatorType::VBS:
+            case LinkActuatorType::PUSH:
+            case LinkActuatorType::SIMPLE_THRUSTER:
+            case LinkActuatorType::THRUSTER:
+            case LinkActuatorType::PROPELLER:
+            case LinkActuatorType::VBS:
             {
                 const char* originTopic = nullptr;
                 if((item = element->FirstChildElement("ros_subscriber")) != nullptr
@@ -679,12 +698,13 @@ Actuator* ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::stri
                 break;
         }
     }
-    return act;
+    return actPtr;
 }
 
-Sensor* ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& namePrefix)
+std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& namePrefix)
 {
-    Sensor* sens = ScenarioParser::ParseSensor(element, namePrefix);
+    std::unique_ptr<Sensor, SensorDeleter> sensPtr = ScenarioParser::ParseSensor(element, namePrefix);
+    Sensor* sens = sensPtr.get();
     
     if(sens != nullptr)
     {
@@ -709,14 +729,14 @@ Sensor* ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& 
         if((item = element->FirstChildElement("ros_publisher")) != nullptr)
         {
             if(item->QueryStringAttribute("topic", &topic) != XML_SUCCESS)
-                return sens;
+                return sensPtr;
 
             if(item->QueryStringAttribute("frame_id", &frameId) == XML_SUCCESS)
                 frameIdStr = std::string(frameId);
         }    
         else
         {
-            return sens;
+            return sensPtr;
         }
         std::string topicStr(topic);
 
@@ -918,8 +938,8 @@ Sensor* ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& 
                     case VisionSensorType::MULTIBEAM2:
                     {
                         pubs[sensorName] = nh_->create_publisher<sensor_msgs::msg::PointCloud2>(topicStr, queueSize);
-                        Multibeam2* mb = (Multibeam2*)sens;
-                        mb->InstallNewDataHandler(std::bind(&ROS2SimulationManager::Multibeam2ScanReady, sim, _1));
+                        Lidar* mb = (Lidar*)sens;
+                        mb->InstallNewDataHandler(std::bind(&ROS2SimulationManager::LidarScanReady, sim, _1));
                     }
                         break;
 
@@ -989,12 +1009,13 @@ Sensor* ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& 
                 break;
         }
     }
-    return sens;
+    return sensPtr;
 }
 
-Comm* ROS2ScenarioParser::ParseComm(XMLElement* element, const std::string& namePrefix)
+std::unique_ptr<Comm, CommDeleter> ROS2ScenarioParser::ParseComm(XMLElement* element, const std::string& namePrefix)
 {
-    Comm* comm = ScenarioParser::ParseComm(element, namePrefix);
+    std::unique_ptr<Comm, CommDeleter> commPtr = ScenarioParser::ParseComm(element, namePrefix);
+    Comm* comm = commPtr.get();
     if(comm != nullptr)
     {
         ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
@@ -1017,7 +1038,7 @@ Comm* ROS2ScenarioParser::ParseComm(XMLElement* element, const std::string& name
         }
 
         if(pubTopic == nullptr && subTopic == nullptr)
-            return comm;
+            return commPtr;
 
         //Generate publishers for different comm types
         switch(comm->getType())
@@ -1080,12 +1101,13 @@ Comm* ROS2ScenarioParser::ParseComm(XMLElement* element, const std::string& name
                 break;
         }
     }
-    return comm;
+    return commPtr;
 }
 
-Light* ROS2ScenarioParser::ParseLight(XMLElement* element, const std::string& namePrefix)
+std::unique_ptr<Light> ROS2ScenarioParser::ParseLight(XMLElement* element, const std::string& namePrefix)
 {
-    Light* l = ScenarioParser::ParseLight(element, namePrefix);
+    std::unique_ptr<Light> lPtr = ScenarioParser::ParseLight(element, namePrefix);
+    Light* l = lPtr.get();
     
     if(l != nullptr)
     {
@@ -1114,7 +1136,7 @@ Light* ROS2ScenarioParser::ParseLight(XMLElement* element, const std::string& na
             srvs[l->getName()] = nh_->create_service<std_srvs::srv::SetBool>(std::string(switchTopic), callbackFunc);
         }
     }
-    return l;
+    return lPtr;
 }
 
 bool ROS2ScenarioParser::ParseContact(XMLElement* element)

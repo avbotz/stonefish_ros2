@@ -52,7 +52,7 @@ namespace sf
     class EventBasedCamera;
     class Multibeam;
     class Profiler;
-    class Multibeam2;
+    class Lidar;
     class FLS;
     class SSS;
     class MSIS;
@@ -80,7 +80,7 @@ namespace sf
         void PublishMultibeam(rclcpp::PublisherBase::SharedPtr pub, Multibeam* mb) const;
         void PublishMultibeamPCL(rclcpp::PublisherBase::SharedPtr pub, Multibeam* mb) const;
         void PublishProfiler(rclcpp::PublisherBase::SharedPtr pub, Profiler* prof) const;
-        void PublishMultibeam2(rclcpp::PublisherBase::SharedPtr pub, Multibeam2* mb) const;
+        void PublishLidar(rclcpp::PublisherBase::SharedPtr pub, Lidar* mb) const;
         void PublishContact(rclcpp::PublisherBase::SharedPtr pub, Contact* cnt) const;
         void PublishUSBL(rclcpp::PublisherBase::SharedPtr pub, rclcpp::PublisherBase::SharedPtr pubInfo, USBL* usbl) const;
         void PublishTrajectoryState(rclcpp::PublisherBase::SharedPtr pubOdom, rclcpp::PublisherBase::SharedPtr pubIter, AnimatedEntity* anim) const;

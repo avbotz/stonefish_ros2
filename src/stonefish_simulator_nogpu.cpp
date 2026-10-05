@@ -38,8 +38,8 @@ public:
                            sf::Scalar rate) 
                            : Node("stonefish_simulator_nogpu")
     {   
-        sf::ROS2SimulationManager* manager = new sf::ROS2SimulationManager(rate, scenarioPath, std::shared_ptr<rclcpp::Node>(this));
-        app_ = std::shared_ptr<sf::ROS2ConsoleSimulationApp>(new sf::ROS2ConsoleSimulationApp("Stonefish Simulator", dataPath, manager));
+        auto manager = std::make_unique<sf::ROS2SimulationManager>(rate, scenarioPath, std::shared_ptr<rclcpp::Node>(this));
+        app_ = std::shared_ptr<sf::ROS2ConsoleSimulationApp>(new sf::ROS2ConsoleSimulationApp("Stonefish Simulator", dataPath, std::move(manager)));
         app_->Startup();
     };
 

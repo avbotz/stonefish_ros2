@@ -40,13 +40,13 @@ namespace sf
 
    protected:
         virtual bool PreProcess(XMLNode* root, const std::map<std::string, std::string>& args);
-        virtual VelocityField* ParseVelocityField(XMLElement* element);
+        virtual std::unique_ptr<VelocityField> ParseVelocityField(XMLElement* element);
         virtual bool ParseRobot(XMLElement* element);
         virtual bool ParseAnimated(XMLElement* element);
-        virtual Actuator* ParseActuator(XMLElement* element, const std::string& namePrefix);
-        virtual Sensor* ParseSensor(XMLElement* element, const std::string& namePrefix);
-        virtual Comm* ParseComm(XMLElement* element, const std::string& namePrefix);
-        virtual Light* ParseLight(XMLElement* element, const std::string& namePrefix);
+        virtual std::unique_ptr<Actuator, ActuatorDeleter> ParseActuator(XMLElement* element, const std::string& namePrefix);
+        virtual std::unique_ptr<Sensor, SensorDeleter> ParseSensor(XMLElement* element, const std::string& namePrefix);
+        virtual std::unique_ptr<Comm, CommDeleter> ParseComm(XMLElement* element, const std::string& namePrefix);
+        virtual std::unique_ptr<Light> ParseLight(XMLElement* element, const std::string& namePrefix);
         virtual bool ParseContact(XMLElement* element);
         virtual FixedJoint* ParseGlue(XMLElement* element);
 

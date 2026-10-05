@@ -54,7 +54,7 @@
 #include <Stonefish/sensors/vision/SegmentationCamera.h>
 #include <Stonefish/sensors/vision/EventBasedCamera.h>
 #include <Stonefish/sensors/scalar/Multibeam.h>
-#include <Stonefish/sensors/vision/Multibeam2.h>
+#include <Stonefish/sensors/vision/Lidar.h>
 #include <Stonefish/sensors/vision/FLS.h>
 #include <Stonefish/sensors/vision/SSS.h>
 #include <Stonefish/sensors/vision/MSIS.h>
@@ -68,6 +68,7 @@
 #include <Stonefish/actuators/Rudder.h>
 #include <Stonefish/actuators/SuctionCup.h>
 #include <Stonefish/actuators/Motor.h>
+#include <Stonefish/actuators/DCMotor.h>
 #include <Stonefish/actuators/Servo.h>
 #include <Stonefish/actuators/VariableBuoyancy.h>
 #include <Stonefish/actuators/Light.h>
@@ -77,6 +78,16 @@ using namespace std::placeholders;
 
 namespace sf
 {
+
+static bool IsLinkActuator(Actuator* act, LinkActuatorType type)
+{
+    return act->getType() == ActuatorType::LINK && static_cast<LinkActuator*>(act)->getLinkActuatorType() == type;
+}
+
+static bool IsJointActuator(Actuator* act, JointActuatorType type)
+{
+    return act->getType() == ActuatorType::JOINT && static_cast<JointActuator*>(act)->getJointActuatorType() == type;
+}
 
 ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string scenarioFilePath, const std::shared_ptr<rclcpp::Node>& nh)
 	: SimulationManager(stepsPerSecond, Solver::SI, CollisionFilter::EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh)
@@ -408,9 +419,17 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
             
             while((actuator = rosRobots_[i]->robot_->getActuator(aID++)) != nullptr)
             {
-                if(actuator->getType() == ActuatorType::MOTOR)
+                if(IsJointActuator(actuator, JointActuatorType::MOTOR))
                 {
                     Motor* mtr = (Motor*)actuator;
+                    msg.name.push_back(mtr->getJointName());
+                    msg.position.push_back(mtr->getAngle());
+                    msg.velocity.push_back(mtr->getAngularVelocity());
+                    msg.effort.push_back(mtr->getTorque());
+                }
+                else if(IsJointActuator(actuator, JointActuatorType::DCMOTOR))
+                {
+                    DCMotor* mtr = (DCMotor*)actuator;
                     msg.name.push_back(mtr->getJointName());
                     msg.position.push_back(mtr->getAngle());
                     msg.velocity.push_back(mtr->getAngularVelocity());
@@ -433,7 +452,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
             
             while((actuator = rosRobots_[i]->robot_->getActuator(aID++)) != nullptr)
             {
-                if(actuator->getType() == ActuatorType::SERVO)
+                if(IsJointActuator(actuator, JointActuatorType::SERVO))
                 {
                     Servo* srv = (Servo*)actuator;
                     msg.name.push_back(srv->getJointName());
@@ -458,7 +477,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
             
             while((actuator = rosRobots_[i]->robot_->getActuator(aID++)) != nullptr)
             {
-                if(actuator->getType() == ActuatorType::RUDDER)
+                if(IsLinkActuator(actuator, LinkActuatorType::RUDDER))
                 {
                     Rudder* rudder = (Rudder*)actuator;
                     msg.name.push_back(rudder->getName());
@@ -489,7 +508,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
 
             while((actuator = rosRobots_[i]->robot_->getActuator(aID++)) != nullptr)
             {
-                if(actuator->getType() == ActuatorType::THRUSTER)
+                if(IsLinkActuator(actuator, LinkActuatorType::THRUSTER))
                 {
                     Thruster* th = (Thruster*)actuator;
                     msg.setpoint[thID] = th->getSetpoint();
@@ -501,7 +520,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     if(thID == rosRobots_[i]->thrusterSetpoints_.size())
                         break;
                 }
-                else if(actuator->getType() == ActuatorType::SIMPLE_THRUSTER)
+                else if(IsLinkActuator(actuator, LinkActuatorType::SIMPLE_THRUSTER))
                 {
                     SimpleThruster* th = (SimpleThruster*)actuator;
                     msg.setpoint[thID] = th->getThrustSetpoint();
@@ -531,190 +550,217 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
 
         while((actuator = rosRobots_[i]->robot_->getActuator(aID++)) != nullptr)
         {
-            switch(actuator->getType())
+            if(actuator->getType() == ActuatorType::LINK)
             {
-                case ActuatorType::PUSH:
+                switch(static_cast<LinkActuator*>(actuator)->getLinkActuatorType())
                 {
-                    Push* push = (Push*)actuator;    
-                    if(rosRobots_[i]->thrusterSetpointsChanged_)
+                    case LinkActuatorType::PUSH:
                     {
-                        push->setForce(rosRobots_[i]->thrusterSetpoints_[thID++]);
-                    }
+                        Push* push = (Push*)actuator;    
+                        if(rosRobots_[i]->thrusterSetpointsChanged_)
+                        {
+                            push->setForce(rosRobots_[i]->thrusterSetpoints_[thID++]);
+                        }
 
-                    auto it = pubs_.find(actuator->getName());
-                    if(it != pubs_.end())
-                    {
-                        geometry_msgs::msg::WrenchStamped msg;
-                        msg.header.stamp = nh_->get_clock()->now();
-                        msg.header.frame_id = push->getName();
-                        msg.wrench.force.x = push->getForce();
-                        std::static_pointer_cast<rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>>(it->second)->publish(msg);
+                        auto it = pubs_.find(actuator->getName());
+                        if(it != pubs_.end())
+                        {
+                            geometry_msgs::msg::WrenchStamped msg;
+                            msg.header.stamp = nh_->get_clock()->now();
+                            msg.header.frame_id = push->getName();
+                            msg.wrench.force.x = push->getForce();
+                            std::static_pointer_cast<rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>>(it->second)->publish(msg);
+                        }
                     }
-                }
-                    break;
+                        break;
 
-                case ActuatorType::THRUSTER:
-                {
-                    Thruster* th = ((Thruster*)actuator);
-                    if(rosRobots_[i]->thrusterSetpointsChanged_)
+                    case LinkActuatorType::THRUSTER:
                     {
-                        th->setSetpoint(rosRobots_[i]->thrusterSetpoints_[thID++]);
-                    }
+                        Thruster* th = ((Thruster*)actuator);
+                        if(rosRobots_[i]->thrusterSetpointsChanged_)
+                        {
+                            th->setSetpoint(rosRobots_[i]->thrusterSetpoints_[thID++]);
+                        }
                         
-                    auto it = pubs_.find(actuator->getName()+"/wrench");
-                    if(it != pubs_.end())
-                    {
-                        geometry_msgs::msg::WrenchStamped msg;
-                        msg.header.stamp = nh_->get_clock()->now();
-                        msg.header.frame_id = th->getName();
-                        msg.wrench.force.x = th->getThrust();
-                        msg.wrench.torque.x = th->getTorque();
-                        std::static_pointer_cast<rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>>(it->second)->publish(msg);
-                    }            
+                        auto it = pubs_.find(actuator->getName()+"/wrench");
+                        if(it != pubs_.end())
+                        {
+                            geometry_msgs::msg::WrenchStamped msg;
+                            msg.header.stamp = nh_->get_clock()->now();
+                            msg.header.frame_id = th->getName();
+                            msg.wrench.force.x = th->getThrust();
+                            msg.wrench.torque.x = th->getTorque();
+                            std::static_pointer_cast<rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>>(it->second)->publish(msg);
+                        }            
 
-                    it = pubs_.find(actuator->getName()+"/joint_state");
-                    if(it != pubs_.end())
-                    {
-                        //Publish propeller rotation for visualization
-                        sensor_msgs::msg::JointState msg;
-                        msg.header.stamp = nh_->get_clock()->now();
-                        msg.header.frame_id = th->getName();
-                        msg.name.push_back(th->getName()+"/propeller");
-                        msg.position.push_back(th->getAngle()/Scalar(100)); // Scaled for visualisation 
-                        msg.velocity.push_back(th->getOmega());
-                        msg.effort.push_back(th->getThrust());
-                        std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::JointState>>(it->second)->publish(msg);
+                        it = pubs_.find(actuator->getName()+"/joint_state");
+                        if(it != pubs_.end())
+                        {
+                            //Publish propeller rotation for visualization
+                            sensor_msgs::msg::JointState msg;
+                            msg.header.stamp = nh_->get_clock()->now();
+                            msg.header.frame_id = th->getName();
+                            msg.name.push_back(th->getName()+"/propeller");
+                            msg.position.push_back(th->getAngle()/Scalar(100)); // Scaled for visualisation 
+                            msg.velocity.push_back(th->getOmega());
+                            msg.effort.push_back(th->getThrust());
+                            std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::JointState>>(it->second)->publish(msg);
+                        }
                     }
-                }
-                    break;
+                        break;
 
-                case ActuatorType::SIMPLE_THRUSTER:
-                {
-                    SimpleThruster* th = ((SimpleThruster*)actuator);
-                    if(rosRobots_[i]->thrusterSetpointsChanged_)
+                    case LinkActuatorType::SIMPLE_THRUSTER:
                     {
-                        th->setSetpoint(rosRobots_[i]->thrusterSetpoints_[thID++], Scalar(0));
-                    }
+                        SimpleThruster* th = ((SimpleThruster*)actuator);
+                        if(rosRobots_[i]->thrusterSetpointsChanged_)
+                        {
+                            th->setSetpoint(rosRobots_[i]->thrusterSetpoints_[thID++], Scalar(0));
+                        }
                         
-                    auto it = pubs_.find(actuator->getName()+"/wrench");
-                    if(it != pubs_.end())
-                    {
-                        geometry_msgs::msg::WrenchStamped msg;
-                        msg.header.stamp = nh_->get_clock()->now();
-                        msg.header.frame_id = th->getName();
-                        msg.wrench.force.x = th->getThrust();
-                        msg.wrench.torque.x = th->getTorque();
-                        std::static_pointer_cast<rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>>(it->second)->publish(msg);
-                    }            
-
-                    it = pubs_.find(actuator->getName()+"/joint_state");
-                    if(it != pubs_.end())
-                    {
-                        //Publish propeller rotation for visualization
-                        sensor_msgs::msg::JointState msg;
-                        msg.header.stamp = nh_->get_clock()->now();
-                        msg.header.frame_id = th->getName();
-                        msg.name.push_back(th->getName()+"/propeller");
-                        msg.position.push_back(th->getAngle());  
-                        std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::JointState>>(it->second)->publish(msg);
-                    }
-                }
-                    break;
-
-                case ActuatorType::PROPELLER:
-                {
-                    Propeller* prop = (Propeller*)actuator;
-                    if(rosRobots_[i]->propellerSetpointsChanged_)
-                    {
-                        prop->setSetpoint(rosRobots_[i]->propellerSetpoints_[propID++]);
-                    }
-
-                    auto it = pubs_.find(actuator->getName());
-                    if(it != pubs_.end())
-                    {
-                        geometry_msgs::msg::WrenchStamped msg;
-                        msg.header.stamp = nh_->get_clock()->now();
-                        msg.header.frame_id = prop->getName();
-                        msg.wrench.force.x = prop->getThrust();
-                        msg.wrench.torque.x = prop->getTorque();
-                        std::static_pointer_cast<rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>>(it->second)->publish(msg);
-                    }
-                }
-                    break;
-
-                case ActuatorType::RUDDER:
-                {
-                    if(rosRobots_[i]->rudderSetpointsChanged_)
-                    {
-                        ((Rudder*)actuator)->setSetpoint(rosRobots_[i]->rudderSetpoints_[rudderID++]);
-                    }
-                }
-                    break;
-
-                case ActuatorType::MOTOR:
-                {
-                    if(rosRobots_[i]->servoSetpoints_.size() == 0)
-                        continue;
-
-                    auto it = rosRobots_[i]->servoSetpoints_.find(((Motor*)actuator)->getJointName());
-                    if(it != rosRobots_[i]->servoSetpoints_.end())
-                    {
-                        if(it->second.first == ServoControlMode::TORQUE)
+                        auto it = pubs_.find(actuator->getName()+"/wrench");
+                        if(it != pubs_.end())
                         {
-                            ((Motor*)actuator)->setCommand(it->second.second);
+                            geometry_msgs::msg::WrenchStamped msg;
+                            msg.header.stamp = nh_->get_clock()->now();
+                            msg.header.frame_id = th->getName();
+                            msg.wrench.force.x = th->getThrust();
+                            msg.wrench.torque.x = th->getTorque();
+                            std::static_pointer_cast<rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>>(it->second)->publish(msg);
+                        }            
+
+                        it = pubs_.find(actuator->getName()+"/joint_state");
+                        if(it != pubs_.end())
+                        {
+                            //Publish propeller rotation for visualization
+                            sensor_msgs::msg::JointState msg;
+                            msg.header.stamp = nh_->get_clock()->now();
+                            msg.header.frame_id = th->getName();
+                            msg.name.push_back(th->getName()+"/propeller");
+                            msg.position.push_back(th->getAngle());  
+                            std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::JointState>>(it->second)->publish(msg);
                         }
                     }
-                }
-                    break;
+                        break;
 
-                case ActuatorType::SERVO:
-                {
-                    if(rosRobots_[i]->servoSetpoints_.size() == 0)
-                        continue;
-
-                    auto it = rosRobots_[i]->servoSetpoints_.find(((Servo*)actuator)->getJointName());
-                    if(it != rosRobots_[i]->servoSetpoints_.end())
+                    case LinkActuatorType::PROPELLER:
                     {
-                        if(it->second.first == ServoControlMode::VELOCITY)
+                        Propeller* prop = (Propeller*)actuator;
+                        if(rosRobots_[i]->propellerSetpointsChanged_)
                         {
-                            ((Servo*)actuator)->setControlMode(ServoControlMode::VELOCITY);
-                            ((Servo*)actuator)->setDesiredVelocity(it->second.second);
+                            prop->setSetpoint(rosRobots_[i]->propellerSetpoints_[propID++]);
                         }
-                        else if(it->second.first == ServoControlMode::POSITION)
+
+                        auto it = pubs_.find(actuator->getName());
+                        if(it != pubs_.end())
                         {
-                            ((Servo*)actuator)->setControlMode(ServoControlMode::POSITION);
-                            ((Servo*)actuator)->setDesiredPosition(it->second.second);
+                            geometry_msgs::msg::WrenchStamped msg;
+                            msg.header.stamp = nh_->get_clock()->now();
+                            msg.header.frame_id = prop->getName();
+                            msg.wrench.force.x = prop->getThrust();
+                            msg.wrench.torque.x = prop->getTorque();
+                            std::static_pointer_cast<rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>>(it->second)->publish(msg);
                         }
                     }
-                }
-                    break;
+                        break;
 
-                case ActuatorType::VBS:
-                {
-                    auto it = pubs_.find(actuator->getName());
-                    if(it != pubs_.end())
+                    case LinkActuatorType::RUDDER:
                     {
-                        std_msgs::msg::Float64 msg;
-                        msg.data = ((VariableBuoyancy*)actuator)->getLiquidVolume();
-                        std::static_pointer_cast<rclcpp::Publisher<std_msgs::msg::Float64>>(it->second)->publish(msg);
+                        if(rosRobots_[i]->rudderSetpointsChanged_)
+                        {
+                            ((Rudder*)actuator)->setSetpoint(rosRobots_[i]->rudderSetpoints_[rudderID++]);
+                        }
                     }
-                }
-                    break;
+                        break;
 
-                case ActuatorType::SUCTION_CUP:
-                {
-                    auto it = pubs_.find(actuator->getName());
-                    if(it != pubs_.end())
+                    case LinkActuatorType::VBS:
                     {
-                        std_msgs::msg::Bool msg;
-                        msg.data = ((SuctionCup*)actuator)->getPump();
-                        std::static_pointer_cast<rclcpp::Publisher<std_msgs::msg::Bool>>(it->second)->publish(msg);
+                        auto it = pubs_.find(actuator->getName());
+                        if(it != pubs_.end())
+                        {
+                            std_msgs::msg::Float64 msg;
+                            msg.data = ((VariableBuoyancy*)actuator)->getLiquidVolume();
+                            std::static_pointer_cast<rclcpp::Publisher<std_msgs::msg::Float64>>(it->second)->publish(msg);
+                        }
                     }
-                }
-                    break;
+                        break;
 
-                default:
-                    break;
+                    case LinkActuatorType::SUCTION_CUP:
+                    {
+                        auto it = pubs_.find(actuator->getName());
+                        if(it != pubs_.end())
+                        {
+                            std_msgs::msg::Bool msg;
+                            msg.data = ((SuctionCup*)actuator)->getPump();
+                            std::static_pointer_cast<rclcpp::Publisher<std_msgs::msg::Bool>>(it->second)->publish(msg);
+                        }
+                    }
+                        break;
+
+                    default:
+                        break;
+                }
+            }
+            else
+            {
+                switch(static_cast<JointActuator*>(actuator)->getJointActuatorType())
+                {
+                    case JointActuatorType::MOTOR:
+                    {
+                        if(rosRobots_[i]->servoSetpoints_.size() == 0)
+                            continue;
+
+                        auto it = rosRobots_[i]->servoSetpoints_.find(((Motor*)actuator)->getJointName());
+                        if(it != rosRobots_[i]->servoSetpoints_.end())
+                        {
+                            if(it->second.first == ServoControlMode::TORQUE)
+                            {
+                                ((Motor*)actuator)->setTorque(it->second.second);
+                            }
+                        }
+                    }
+                        break;
+
+                    case JointActuatorType::DCMOTOR:
+                    {
+                        if(rosRobots_[i]->servoSetpoints_.size() == 0)
+                            continue;
+
+                        auto it = rosRobots_[i]->servoSetpoints_.find(((DCMotor*)actuator)->getJointName());
+                        if(it != rosRobots_[i]->servoSetpoints_.end())
+                        {
+                            if(it->second.first == ServoControlMode::TORQUE)
+                            {
+                                ((DCMotor*)actuator)->setVoltage(it->second.second);
+                            }
+                        }
+                    }
+                        break;
+
+                    case JointActuatorType::SERVO:
+                    {
+                        if(rosRobots_[i]->servoSetpoints_.size() == 0)
+                            continue;
+
+                        auto it = rosRobots_[i]->servoSetpoints_.find(((Servo*)actuator)->getJointName());
+                        if(it != rosRobots_[i]->servoSetpoints_.end())
+                        {
+                            if(it->second.first == ServoControlMode::VELOCITY)
+                            {
+                                ((Servo*)actuator)->setControlMode(ServoControlMode::VELOCITY);
+                                ((Servo*)actuator)->setDesiredVelocity(it->second.second);
+                            }
+                            else if(it->second.first == ServoControlMode::POSITION)
+                            {
+                                ((Servo*)actuator)->setControlMode(ServoControlMode::POSITION);
+                                ((Servo*)actuator)->setDesiredPosition(it->second.second);
+                            }
+                        }
+                    }
+                        break;
+
+                    default:
+                        break;
+                }
             }
         }
         //Reset change flags
@@ -931,9 +977,9 @@ void ROS2SimulationManager::EventBasedCameraOutputReady(EventBasedCamera* cam)
     interface_->PublishEventBasedCamera(pubs_.at(cam->getName()), cam);
 }
 
-void ROS2SimulationManager::Multibeam2ScanReady(Multibeam2* mb)
+void ROS2SimulationManager::LidarScanReady(Lidar* mb)
 {
-    interface_->PublishMultibeam2(pubs_.at(mb->getName()), mb);
+    interface_->PublishLidar(pubs_.at(mb->getName()), mb);
 }
 
 void ROS2SimulationManager::FLSScanReady(FLS* fls)
@@ -1015,7 +1061,7 @@ void ROS2SimulationManager::EnableCurrentsService(const std_srvs::srv::Trigger::
                                            std_srvs::srv::Trigger::Response::SharedPtr res)
 {
     (void)req;
-    getOcean()->EnableCurrents();
+    getOcean()->EnableVelocityFields();
     res->message = "Ocean current simulation enabled.";
     res->success = true;
 }
@@ -1024,7 +1070,7 @@ void ROS2SimulationManager::DisableCurrentsService(const std_srvs::srv::Trigger:
                                             std_srvs::srv::Trigger::Response::SharedPtr res)
 {   
     (void)req;
-    getOcean()->DisableCurrents();
+    getOcean()->DisableVelocityFields();
     res->message = "Ocean current simulation disabled.";
     res->success = true;
 }
@@ -1064,21 +1110,10 @@ void ROS2SimulationManager::ActuatorOriginCallback(const geometry_msgs::msg::Tra
     T.setOrigin(Vector3(msg->translation.x, msg->translation.y, msg->translation.z));
     T.setRotation(Quaternion(msg->rotation.x, msg->rotation.y, msg->rotation.z, msg->rotation.w));
 
-    switch(act->getType())
-    {
-        case ActuatorType::PUSH:
-        case ActuatorType::SIMPLE_THRUSTER:
-        case ActuatorType::THRUSTER:
-        case ActuatorType::PROPELLER:
-        case ActuatorType::VBS:
-        case ActuatorType::LIGHT:
-            ((LinkActuator*)act)->setRelativeActuatorFrame(T);
-            break;
-
-        default:
-            RCLCPP_WARN_STREAM(nh_->get_logger(), "Live update of origin frame of actuator '" << act->getName() << "' not supported!");
-            break;
-    }
+    if(act->getType() == ActuatorType::LINK)
+        ((LinkActuator*)act)->setRelativeActuatorFrame(T);
+    else
+        RCLCPP_WARN_STREAM(nh_->get_logger(), "Live update of origin frame of actuator '" << act->getName() << "' not supported!");
 }
 
 void ROS2SimulationManager::TrajectoryCallback(const nav_msgs::msg::Odometry::SharedPtr msg, ManualTrajectory* tr)

@@ -29,8 +29,8 @@
 namespace sf
 {
 
-ROS2GraphicalSimulationApp::ROS2GraphicalSimulationApp(std::string title, std::string dataPath, RenderSettings s, HelperSettings h, ROS2SimulationManager* sim)
-    : GraphicalSimulationApp(title, dataPath, s, h, sim)
+ROS2GraphicalSimulationApp::ROS2GraphicalSimulationApp(std::string title, std::string dataPath, RenderSettings s, HelperSettings h, std::unique_ptr<ROS2SimulationManager> sim)
+    : GraphicalSimulationApp(title, dataPath, s, h, std::move(sim))
 {
 }
 

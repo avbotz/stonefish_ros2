@@ -29,8 +29,8 @@
 namespace sf
 {
 
-ROS2ConsoleSimulationApp::ROS2ConsoleSimulationApp(std::string title, std::string dataPath, ROS2SimulationManager* sim)
-    : ConsoleSimulationApp(title, dataPath, sim)
+ROS2ConsoleSimulationApp::ROS2ConsoleSimulationApp(std::string title, std::string dataPath, std::unique_ptr<ROS2SimulationManager> sim)
+    : ConsoleSimulationApp(title, dataPath, std::move(sim))
 {
 }
 

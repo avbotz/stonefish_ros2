@@ -40,9 +40,9 @@ public:
                            sf::Scalar rate) 
                            : Node("stonefish_simulator")
     {   
-        sf::ROS2SimulationManager* manager = new sf::ROS2SimulationManager(rate, scenarioPath, std::shared_ptr<rclcpp::Node>(this));
+        auto manager = std::make_unique<sf::ROS2SimulationManager>(rate, scenarioPath, std::shared_ptr<rclcpp::Node>(this));
         app_ = std::shared_ptr<sf::ROS2GraphicalSimulationApp>(new sf::ROS2GraphicalSimulationApp("Stonefish Simulator", 
-                                                                                                 dataPath, s, h, manager));
+                                                                                                 dataPath, s, h, std::move(manager)));
         app_->Startup();
         tickTimer_ = this->create_wall_timer(16667us, std::bind(&sf::ROS2GraphicalSimulationApp::Tick, app_));
     };

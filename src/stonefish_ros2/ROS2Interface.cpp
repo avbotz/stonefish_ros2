@@ -69,7 +69,7 @@
 #include <Stonefish/sensors/vision/OpticalFlowCamera.h>
 #include <Stonefish/sensors/vision/SegmentationCamera.h>
 #include <Stonefish/sensors/vision/EventBasedCamera.h>
-#include <Stonefish/sensors/vision/Multibeam2.h>
+#include <Stonefish/sensors/vision/Lidar.h>
 #include <Stonefish/sensors/vision/FLS.h>
 #include <Stonefish/sensors/vision/SSS.h>
 #include <Stonefish/sensors/vision/MSIS.h>
@@ -458,7 +458,7 @@ void ROS2Interface::PublishMultibeamPCL(rclcpp::PublisherBase::SharedPtr pub, Mu
 
 void ROS2Interface::PublishProfiler(rclcpp::PublisherBase::SharedPtr pub, Profiler* prof) const
 {
-    const std::vector<Sample>* hist = prof->getHistory();
+    std::unique_ptr<std::vector<Sample>> hist = prof->getHistory();
     SensorChannel channel = prof->getSensorChannelDescription(1); // range channel
 
     sensor_msgs::msg::LaserScan msg;
@@ -495,7 +495,7 @@ void ROS2Interface::PublishProfiler(rclcpp::PublisherBase::SharedPtr pub, Profil
     std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::LaserScan>>(pub)->publish(msg);
 }
 
-void ROS2Interface::PublishMultibeam2(rclcpp::PublisherBase::SharedPtr pub, Multibeam2* mb) const
+void ROS2Interface::PublishLidar(rclcpp::PublisherBase::SharedPtr pub, Lidar* mb) const
 {
     uint32_t hRes, vRes;
     mb->getResolution(hRes, vRes);
