@@ -71,6 +71,7 @@
 #include <Stonefish/actuators/Rudder.h>
 #include <Stonefish/actuators/SuctionCup.h>
 #include <Stonefish/actuators/Motor.h>
+#include <Stonefish/actuators/DCMotor.h>
 #include <Stonefish/actuators/Servo.h>
 #include <Stonefish/actuators/VariableBuoyancy.h>
 #include <Stonefish/actuators/Light.h>
@@ -80,6 +81,16 @@ using namespace std::placeholders;
 
 namespace sf
 {
+
+static bool IsLinkActuator(Actuator* act, LinkActuatorType type)
+{
+    return act->GetType() == ActuatorType::LINK && static_cast<LinkActuator*>(act)->GetLinkActuatorType() == type;
+}
+
+static bool IsJointActuator(Actuator* act, JointActuatorType type)
+{
+    return act->GetType() == ActuatorType::JOINT && static_cast<JointActuator*>(act)->GetJointActuatorType() == type;
+}
 
 ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string scenarioFilePath, const std::shared_ptr<rclcpp::Node>& nh)
 	: SimulationManager(stepsPerSecond, Solver::SI, CollisionFilter::EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh)
@@ -408,11 +419,19 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
             msg.header.stamp = nh_->get_clock()->now();
             msg.header.frame_id = rosRobots_[i]->robot_->GetName();
             
-            while((actuator = rosRobots_[i]->robot_->GetActuator(aID++)) != nullptr && actuator->GetType() == ActuatorType::JOINT)
+            while((actuator = rosRobots_[i]->robot_->GetActuator(aID++)) != nullptr)
             {
-                if(static_cast<JointActuator*>(actuator)->GetJointActuatorType() == JointActuatorType::MOTOR)
+                if(IsJointActuator(actuator, JointActuatorType::MOTOR))
                 {
                     Motor* mtr = static_cast<Motor*>(actuator);
+                    msg.name.push_back(mtr->GetJointName());
+                    msg.position.push_back(mtr->GetAngle());
+                    msg.velocity.push_back(mtr->GetAngularVelocity());
+                    msg.effort.push_back(mtr->GetTorque());
+                }
+                else if(IsJointActuator(actuator, JointActuatorType::DCMOTOR))
+                {
+                    DCMotor* mtr = static_cast<DCMotor*>(actuator);
                     msg.name.push_back(mtr->GetJointName());
                     msg.position.push_back(mtr->GetAngle());
                     msg.velocity.push_back(mtr->GetAngularVelocity());
@@ -433,9 +452,9 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
             msg.header.stamp = nh_->get_clock()->now();
             msg.header.frame_id = rosRobots_[i]->robot_->GetName();
             
-            while((actuator = rosRobots_[i]->robot_->GetActuator(aID++)) != nullptr && actuator->GetType() == ActuatorType::JOINT)
+            while((actuator = rosRobots_[i]->robot_->GetActuator(aID++)) != nullptr)
             {
-                if(static_cast<JointActuator*>(actuator)->GetJointActuatorType() == JointActuatorType::SERVO)
+                if(IsJointActuator(actuator, JointActuatorType::SERVO))
                 {
                     Servo* srv = static_cast<Servo*>(actuator);
                     msg.name.push_back(srv->GetJointName());
@@ -458,9 +477,9 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
             msg.header.stamp = nh_->get_clock()->now();
             msg.header.frame_id = rosRobots_[i]->robot_->GetName();
             
-            while((actuator = rosRobots_[i]->robot_->GetActuator(aID++)) != nullptr && actuator->GetType() == ActuatorType::LINK)
+            while((actuator = rosRobots_[i]->robot_->GetActuator(aID++)) != nullptr)
             {
-                if(static_cast<LinkActuator*>(actuator)->GetLinkActuatorType() == LinkActuatorType::RUDDER)
+                if(IsLinkActuator(actuator, LinkActuatorType::RUDDER))
                 {
                     Rudder* rudder = static_cast<Rudder*>(actuator);
                     msg.name.push_back(rudder->GetName());
@@ -489,9 +508,9 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
             msg.thrust.resize(rosRobots_[i]->thrusterSetpoints_.size());
             msg.torque.resize(rosRobots_[i]->thrusterSetpoints_.size());
 
-            while((actuator = rosRobots_[i]->robot_->GetActuator(aID++)) != nullptr && actuator->GetType() == ActuatorType::LINK)
+            while((actuator = rosRobots_[i]->robot_->GetActuator(aID++)) != nullptr)
             {
-                if(static_cast<LinkActuator*>(actuator)->GetLinkActuatorType() == LinkActuatorType::THRUSTER)
+                if(IsLinkActuator(actuator, LinkActuatorType::THRUSTER))
                 {
                     Thruster* th = static_cast<Thruster*>(actuator);
                     msg.setpoint[thID] = th->GetSetpoint();
@@ -500,7 +519,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     msg.torque[thID] = th->GetTorque();
                     ++thID;
                 }
-                else if(static_cast<LinkActuator*>(actuator)->GetLinkActuatorType() == LinkActuatorType::SIMPLE_THRUSTER)
+                else if(IsLinkActuator(actuator, LinkActuatorType::SIMPLE_THRUSTER))
                 {
                     SimpleThruster* th = static_cast<SimpleThruster*>(actuator);
                     msg.setpoint[thID] = th->GetThrustSetpoint();
@@ -696,6 +715,23 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                             if(it->second.first == ServoControlMode::TORQUE)
                             {
                                 mtr->SetTorque(it->second.second);
+                            }
+                        }
+                    }
+                        break;
+
+                    case JointActuatorType::DCMOTOR:
+                    {
+                        if(rosRobots_[i]->servoSetpoints_.size() == 0)
+                            continue;
+
+                        DCMotor* mtr = static_cast<DCMotor*>(actuator);
+                        auto it = rosRobots_[i]->servoSetpoints_.find(mtr->GetJointName());
+                        if(it != rosRobots_[i]->servoSetpoints_.end())
+                        {
+                            if(it->second.first == ServoControlMode::TORQUE) //DC motors are driven by voltage
+                            {
+                                mtr->SetVoltage(it->second.second);
                             }
                         }
                     }

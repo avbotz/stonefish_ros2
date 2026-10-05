@@ -298,6 +298,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
                     ++nServos;
                     break;
                 case JointActuatorType::MOTOR:
+                case JointActuatorType::DCMOTOR:
                     ++nMotors;
                     break;
                 default:
@@ -357,11 +358,11 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
             subs[robot->GetName() + "/servos"] = nh_->create_subscription<sensor_msgs::msg::JointState>(std::string(topicSrv), 10, callbackFunc);
             //Generate setpoint placeholders for the whole system
             aID = 0;
-            while((act = robot->GetActuator(aID++)) != nullptr && act->GetType() == ActuatorType::JOINT)
+            while((act = robot->GetActuator(aID++)) != nullptr)
             {
-                JointActuator* jointAct = static_cast<JointActuator*>(act);
-                if (jointAct->GetJointActuatorType() == JointActuatorType::SERVO)
-                    ros2Robot->servoSetpoints_[(static_cast<Servo*>(jointAct))->GetJointName()] = std::pair(ServoControlMode::VELOCITY, Scalar(0));
+                if(act->GetType() == ActuatorType::JOINT
+                   && static_cast<JointActuator*>(act)->GetJointActuatorType() == JointActuatorType::SERVO)
+                    ros2Robot->servoSetpoints_[(static_cast<Servo*>(act))->GetJointName()] = std::pair(ServoControlMode::VELOCITY, Scalar(0));
             }
         }
     }
