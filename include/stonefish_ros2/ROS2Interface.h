@@ -63,7 +63,7 @@ namespace sf
     class ROS2Interface
     {
     public:
-        ROS2Interface(const std::shared_ptr<rclcpp::Node> nh);
+        ROS2Interface(const std::shared_ptr<rclcpp::Node> nh, const rclcpp::Clock::SharedPtr clock);
         void PublishTF(std::unique_ptr<tf2_ros::TransformBroadcaster>& br, const sf::Transform& T, const rclcpp::Time& t, const std::string &frame_id, const std::string &child_frame_id) const;
         void PublishAccelerometer(rclcpp::PublisherBase::SharedPtr pub, Accelerometer* acc) const;
         void PublishGyroscope(rclcpp::PublisherBase::SharedPtr pub, Gyroscope* gyro) const;
@@ -96,6 +96,7 @@ namespace sf
 
     private:
         std::shared_ptr<rclcpp::Node> nh_;
+        rclcpp::Clock::SharedPtr clock_;
     };
 }
 #endif

@@ -39,6 +39,7 @@
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "rosgraph_msgs/msg/clock.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 #include "stonefish_ros2/srv/sonar_settings.hpp"
 #include "stonefish_ros2/srv/sonar_settings2.hpp"
@@ -119,8 +120,6 @@ namespace sf
 
         void AddROS2Robot(const std::shared_ptr<ROS2Robot>& robot);
         bool RespawnROS2Robot(const std::string& robotName, const Transform& origin);
-        void SimulationClockSleep(uint64_t us);
-        uint64_t getSimulationClock() const;
         std::map<std::string, rclcpp::ServiceBase::SharedPtr>& getServices();
         std::map<std::string, rclcpp::PublisherBase::SharedPtr>& getPublishers();
         std::map<std::string, image_transport::Publisher>& getImagePublishers();
@@ -171,11 +170,15 @@ namespace sf
         void LightService(const std_srvs::srv::SetBool::Request::SharedPtr req,
                             std_srvs::srv::SetBool::Response::SharedPtr res, Light* light);
         void CommCallback(const std_msgs::msg::String::SharedPtr msg, Comm* comm);
+        rcl_interfaces::msg::SetParametersResult ParametersCallback(const std::vector<rclcpp::Parameter>& params);
 
     protected:
         std::string scenarioPath_;
         std::vector<std::shared_ptr<ROS2Robot>> rosRobots_;
         std::shared_ptr<rclcpp::Node> nh_;
+        rclcpp::Clock::SharedPtr clock_; //Clock used to stamp messages (simulation time when publishing /clock)
+        rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clockPub_;
+        rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr paramCallbackHandle_;
         std::shared_ptr<image_transport::ImageTransport> it_;
         std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;
         std::shared_ptr<ROS2Interface> interface_;

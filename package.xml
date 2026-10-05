@@ -18,6 +18,7 @@
   <depend>nav_msgs</depend>
   <depend>visualization_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>rosgraph_msgs</depend>
   <depend>pcl</depend>
   <depend>pcl_conversions</depend>
   <depend>image_transport</depend>
