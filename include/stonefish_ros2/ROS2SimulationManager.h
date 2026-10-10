@@ -26,6 +26,10 @@
 #ifndef __Stonefish_ROS2SimulationManager__
 #define __Stonefish_ROS2SimulationManager__
 
+#include <condition_variable>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include "rclcpp/rclcpp.hpp"
 #include "image_transport/image_transport.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -60,6 +64,7 @@ namespace sf
     class Push;
     class VariableBuoyancy;
     class SuctionCup;
+    class Camera;
     class ColorCamera;
 	class DepthCamera;
     class ThermalCamera;
@@ -125,6 +130,8 @@ namespace sf
         std::map<std::string, image_transport::Publisher>& getImagePublishers();
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& getSubscribers();
         std::shared_ptr<image_transport::ImageTransport> getImageTransportHandle();
+        //! Options for subscriptions to actuator setpoints, which are handled on their own thread.
+        rclcpp::SubscriptionOptions getSetpointSubscriptionOptions() const;
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr>>& getCameraMsgPrototypes();
         std::map<std::string, std::tuple<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr, sensor_msgs::msg::Image::SharedPtr>>& getDualImageCameraMsgPrototypes();
 		std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::Image::SharedPtr>>& getSonarMsgPrototypes();        
@@ -172,15 +179,35 @@ namespace sf
         void CommCallback(const std_msgs::msg::String::SharedPtr msg, Comm* comm);
         rcl_interfaces::msg::SetParametersResult ParametersCallback(const std::vector<rclcpp::Parameter>& params);
 
+    private:
+        static sensor_msgs::msg::Image::SharedPtr CopyImage(const sensor_msgs::msg::Image& prototype, const void* data);
+        rclcpp::Time CaptureStamp(Camera* cam);
+        void PublishSegmentationLabels(const std::string& camera, const std_msgs::msg::Header& header);
+        void PublishImageAsync(const std::string& camera, std::function<void()> publish);
+        void StartImageThread();
+        void StopImageThread();
+        void StopSetpointThread();
+
     protected:
         std::string scenarioPath_;
         std::vector<std::shared_ptr<ROS2Robot>> rosRobots_;
         std::shared_ptr<rclcpp::Node> nh_;
         rclcpp::Clock::SharedPtr clock_; //Clock used to stamp messages (simulation time when publishing /clock)
         rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clockPub_;
+        unsigned int stateDivider_; //Robot state and /clock are published every this many steps
+        uint64_t stepCounter_;
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr paramCallbackHandle_;
         std::shared_ptr<image_transport::ImageTransport> it_;
         std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;
+        rclcpp::CallbackGroup::SharedPtr setpointCallbackGroup_;
+        rclcpp::executors::SingleThreadedExecutor::SharedPtr setpointExecutor_;
+        std::thread setpointThread_;
+        //Camera images are published on their own thread, rather than by the renderer while it holds the drawing queue
+        std::thread imageThread_;
+        std::mutex imageMutex_;
+        std::condition_variable imageCondition_;
+        std::map<std::string, std::function<void()>> pendingImages_; //Latest unpublished frame of each camera
+        bool stopImageThread_;
         std::shared_ptr<ROS2Interface> interface_;
         std::map<std::string, rclcpp::ServiceBase::SharedPtr> srvs_;
         std::map<std::string, rclcpp::PublisherBase::SharedPtr> pubs_;
@@ -192,6 +219,7 @@ namespace sf
             sensor_msgs::msg::CameraInfo::SharedPtr, sensor_msgs::msg::Image::SharedPtr>> dualImageCameraMsgPrototypes_;
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, 
             sensor_msgs::msg::Image::SharedPtr>> sonarMsgPrototypes_;
+        std::map<std::string, unsigned int> segmentationLabelsRevisions_; //Revision of the labels last published for each segmentation camera
     };
 }
 

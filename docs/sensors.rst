@@ -143,6 +143,8 @@ Second message type: ``sensor_msgs::msg::CameraInfo``
 
 Third message type: ``sensor_msgs::msg::Image``
 
+Fourth message type: ``vision_msgs::msg::LabelInfo``, latched on ``<topic>/label_info``. It names the object (entity, sensor, actuator or communication device) drawn with each pixel value of the image; 0 is the background and ``ocean_particles`` marks the marine snow. It is published again whenever objects are added.
+
 Event-based camera
 ------------------
 
