@@ -50,6 +50,7 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
+#include "vision_msgs/msg/label_info.hpp"
 #include "stonefish_ros2/msg/int32_stamped.hpp"
 #include "stonefish_ros2/msg/beacon_info.hpp"
 #include "stonefish_ros2/msg/dvl.hpp"
@@ -334,28 +335,28 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
         {
             std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::ThrustersCallback, sim, _1, ros2Robot.get());
-            subs[robot->GetName() + "/thrusters"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicThrust), 10, callbackFunc);
+            subs[robot->GetName() + "/thrusters"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicThrust), 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
         }
 
         if(nPropellers > 0 && item->QueryStringAttribute("propellers", &topicProp) == XML_SUCCESS)
         {
             std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::PropellersCallback, sim, _1, ros2Robot.get());
-            subs[robot->GetName() + "/propellers"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicProp), 10, callbackFunc);
+            subs[robot->GetName() + "/propellers"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicProp), 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
         }
 
         if(nRudders > 0 && item->QueryStringAttribute("rudders", &topicRudder) == XML_SUCCESS)
         {
             std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::RuddersCallback, sim, _1, ros2Robot.get());
-            subs[robot->GetName() + "/rudders"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicRudder), 10, callbackFunc);
+            subs[robot->GetName() + "/rudders"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicRudder), 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
         }
 
         if(nServos > 0 && item->QueryStringAttribute("servos", &topicSrv) == XML_SUCCESS)
         {
             std::function<void(const sensor_msgs::msg::JointState::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::ServosCallback, sim, _1, ros2Robot.get());
-            subs[robot->GetName() + "/servos"] = nh_->create_subscription<sensor_msgs::msg::JointState>(std::string(topicSrv), 10, callbackFunc);
+            subs[robot->GetName() + "/servos"] = nh_->create_subscription<sensor_msgs::msg::JointState>(std::string(topicSrv), 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
             //Generate setpoint placeholders for the whole system
             aID = 0;
             while((act = robot->GetActuator(aID++)) != nullptr)
@@ -408,7 +409,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
                     ros2Robot->servoSetpoints_[jointNames[i]] = std::make_pair(mode, Scalar(0));
                 std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::JointGroupCallback, sim, _1, ros2Robot.get(), mode, jointNames);
-                subs[robot->GetName() + "/joint_group" + std::to_string(jg)] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(jgTopic), 10, callbackFunc);
+                subs[robot->GetName() + "/joint_group" + std::to_string(jg)] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(jgTopic), 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
                 ++jg;
             }
         }
@@ -437,7 +438,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
                 ros2Robot->servoSetpoints_[jointNameStr] = std::make_pair(mode, Scalar(0));
                 std::function<void(const std_msgs::msg::Float64::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::JointCallback, sim, _1, ros2Robot.get(), mode, jointNameStr);
-                subs[robot->GetName() + "/joint" + std::to_string(jg)] = nh_->create_subscription<std_msgs::msg::Float64>(std::string(jgTopic), 10, callbackFunc);
+                subs[robot->GetName() + "/joint" + std::to_string(jg)] = nh_->create_subscription<std_msgs::msg::Float64>(std::string(jgTopic), 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
                 ++jg;
             }
         }
@@ -575,7 +576,7 @@ std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XML
                 {
                     std::function<void(const std_msgs::msg::Float64::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::SimpleThrusterCallback, sim, _1, static_cast<SimpleThruster*>(act.get()));
-                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc);
+                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
                 }
 
                 if (auto it = pubTopics.find("wrench_topic"); it != pubTopics.end())
@@ -591,7 +592,7 @@ std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XML
                 {
                     std::function<void(const std_msgs::msg::Float64::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::ThrusterCallback, sim, _1, static_cast<Thruster*>(act.get()));
-                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc);
+                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
                 }
                 
                 if (auto it = pubTopics.find("wrench_topic"); it != pubTopics.end())
@@ -607,7 +608,7 @@ std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XML
                 {
                     std::function<void(const std_msgs::msg::Float64::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::PropellerCallback, sim, _1, static_cast<Propeller*>(act.get()));
-                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc);
+                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
                 }
                 
                 if (auto it = pubTopics.find("topic"); it != pubTopics.end())
@@ -620,7 +621,7 @@ std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XML
                 {
                     std::function<void(const std_msgs::msg::Float64::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::PushCallback, sim, _1, static_cast<Push*>(act.get()));
-                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc);
+                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
                 }
                 
                 if (auto it = pubTopics.find("topic"); it != pubTopics.end())
@@ -633,7 +634,7 @@ std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XML
                 {
                     std::function<void(const std_msgs::msg::Float64::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::VBSCallback, sim, _1, static_cast<VariableBuoyancy*>(act.get()));
-                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc);
+                    subs[actuatorName] = nh_->create_subscription<std_msgs::msg::Float64>(it->second, 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
                 }
                 
                 if (auto it = pubTopics.find("topic"); it != pubTopics.end())
@@ -951,6 +952,8 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
                         imgPubs[sensorName] = imgTrans->advertise(it->second + "/image_raw", queueSize);
                         imgPubs[sensorName + "/display"] = imgTrans->advertise(it->second + "/image_color", queueSize);
                         pubs[sensorName + "/info"] = nh_->create_publisher<sensor_msgs::msg::CameraInfo>(it->second + "/camera_info", queueSize);                        
+                        //Names of the pixel values, latched as they only change when objects are added
+                        pubs[sensorName + "/labels"] = nh_->create_publisher<vision_msgs::msg::LabelInfo>(it->second + "/label_info", rclcpp::QoS(1).transient_local());
                         SegmentationCamera* cam = static_cast<SegmentationCamera*>(sens.get());
                         cam->InstallNewDataHandler(std::bind(&ROS2SimulationManager::SegmentationCameraImageReady, sim, _1));
                         dualCamMsgProto[sensorName] = ROS2Interface::GenerateSegmentationCameraMsgPrototypes(cam);

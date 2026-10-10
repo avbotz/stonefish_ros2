@@ -36,6 +36,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp"
+#include "vision_msgs/msg/label_info.hpp"
 
 #include <Stonefish/entities/animation/ManualTrajectory.h>
 #include <Stonefish/entities/forcefields/Uniform.h>
@@ -93,7 +94,8 @@ static bool IsJointActuator(Actuator* act, JointActuatorType type)
 }
 
 ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string scenarioFilePath, const std::shared_ptr<rclcpp::Node>& nh)
-	: SimulationManager(stepsPerSecond, Solver::SI, CollisionFilter::EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh)
+	: SimulationManager(stepsPerSecond, Solver::SI, CollisionFilter::EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh),
+      stateDivider_(1), stepCounter_(0), stopImageThread_(false)
 {
     //Simulation clock (similar to Gazebo): physics is paced by the wall clock scaled by the realtime factor,
     //and optionally the simulation time is published on /clock and used to stamp all messages
@@ -114,15 +116,153 @@ ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string 
     else
         clock_ = nh_->get_clock();
 
+    //Robot state (TF, joints, actuators) and /clock are published from the physics thread, and each message
+    //costs per subscriber. Publishing them every step (0) is rarely needed: the controllers run far slower.
+    //The rate is rounded to a whole number of steps. Message stamps stay exact, as the clock advances every step.
+    double stateRate = nh_->declare_parameter("state_publish_rate", 0.0);
+    if(stateRate > 0.0)
+        stateDivider_ = (unsigned int)std::max(1L, std::lround(stepsPerSecond / stateRate));
+
     paramCallbackHandle_ = nh_->add_on_set_parameters_callback(std::bind(&ROS2SimulationManager::ParametersCallback, this, _1));
 
     it_ = std::make_shared<image_transport::ImageTransport>(nh_);
     interface_ = std::make_shared<ROS2Interface>(nh_, clock_);
     tf_ = std::make_unique<tf2_ros::TransformBroadcaster>(nh_);
+
+    //Actuator setpoints are handled on their own thread: the main thread renders, and a frame can take
+    //tens of milliseconds on a slow GPU, which would otherwise delay every command by as much
+    setpointCallbackGroup_ = nh_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
+    setpointExecutor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    setpointExecutor_->add_callback_group(setpointCallbackGroup_, nh_->get_node_base_interface());
 }
 
 ROS2SimulationManager::~ROS2SimulationManager()
 {
+    StopSetpointThread();
+    StopImageThread();
+}
+
+void ROS2SimulationManager::StopSetpointThread()
+{
+    setpointExecutor_->cancel();
+    if(setpointThread_.joinable())
+        setpointThread_.join();
+}
+
+void ROS2SimulationManager::StartImageThread()
+{
+    stopImageThread_ = false;
+    imageThread_ = std::thread([this]()
+    {
+        std::unique_lock<std::mutex> lock(imageMutex_);
+        while(true)
+        {
+            imageCondition_.wait(lock, [this]{ return stopImageThread_ || !pendingImages_.empty(); });
+            if(stopImageThread_)
+                return;
+
+            std::map<std::string, std::function<void()>> images;
+            images.swap(pendingImages_);
+            lock.unlock();
+            for(auto& image : images)
+            {
+                try
+                {
+                    image.second();
+                }
+                catch(const std::exception& e)
+                {
+                    RCLCPP_ERROR_STREAM(nh_->get_logger(), "Publishing image of '" << image.first << "' failed: " << e.what());
+                }
+            }
+            lock.lock();
+        }
+    });
+}
+
+void ROS2SimulationManager::StopImageThread()
+{
+    {
+        std::lock_guard<std::mutex> lock(imageMutex_);
+        stopImageThread_ = true;
+        pendingImages_.clear();
+    }
+    imageCondition_.notify_one();
+    if(imageThread_.joinable())
+        imageThread_.join();
+}
+
+void ROS2SimulationManager::PublishImageAsync(const std::string& camera, std::function<void()> publish)
+{
+    {
+        std::lock_guard<std::mutex> lock(imageMutex_);
+        pendingImages_[camera] = std::move(publish); //Replaces a frame not yet published, which is stale by now
+    }
+    imageCondition_.notify_one();
+}
+
+sensor_msgs::msg::Image::SharedPtr ROS2SimulationManager::CopyImage(const sensor_msgs::msg::Image& prototype, const void* data)
+{
+    //A new message per frame, as the previous one may still be being published
+    auto img = std::make_shared<sensor_msgs::msg::Image>();
+    img->header = prototype.header;
+    img->height = prototype.height;
+    img->width = prototype.width;
+    img->encoding = prototype.encoding;
+    img->is_bigendian = prototype.is_bigendian;
+    img->step = prototype.step;
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    img->data.assign(bytes, bytes + (size_t)prototype.step * prototype.height);
+    return img;
+}
+
+rclcpp::Time ROS2SimulationManager::CaptureStamp(Camera* cam)
+{
+    //On the simulation clock, images are stamped with the time their frame was captured, shared by all cameras
+    //rendered in the same frame, rather than when they are read back from the GPU (a frame or more later).
+    //The capture time is on the system time base, so it is shifted to the simulation time published on /clock.
+    if(clockPub_ != nullptr)
+    {
+        Scalar t = std::max(cam->GetLastCaptureTime() - GetSimulationTimeOffset(), Scalar(0)); //Frames from before the start are stamped 0
+        return rclcpp::Time((rcl_time_point_value_t)std::llround(t * Scalar(1e9)), RCL_ROS_TIME);
+    }
+    return clock_->now();
+}
+
+void ROS2SimulationManager::PublishSegmentationLabels(const std::string& camera, const std_msgs::msg::Header& header)
+{
+    //Only when they change, which is in the first frames and when objects are added. The revision is read
+    //before the labels, so labels changing in between are published again with the next image.
+    unsigned int revision = GetSegmentationLabelsRevision();
+    auto published = segmentationLabelsRevisions_.find(camera);
+    if(published != segmentationLabelsRevisions_.end() && published->second == revision)
+        return;
+    segmentationLabelsRevisions_[camera] = revision;
+
+    vision_msgs::msg::LabelInfo msg;
+    msg.header = header;
+    std::vector<std::string> labels = GetSegmentationLabels();
+    for(size_t i=1; i<labels.size(); ++i) //Pixel value 0 is the background
+    {
+        vision_msgs::msg::VisionClass c;
+        c.class_id = (uint16_t)i;
+        c.class_name = labels[i];
+        msg.class_map.push_back(c);
+    }
+    vision_msgs::msg::VisionClass particles;
+    particles.class_id = SegmentationCamera::OCEAN_PARTICLES_ID;
+    particles.class_name = "ocean_particles";
+    msg.class_map.push_back(particles);
+
+    //Published right away, so that it reaches subscribers before the image, which is queued
+    std::static_pointer_cast<rclcpp::Publisher<vision_msgs::msg::LabelInfo>>(pubs_.at(camera + "/labels"))->publish(msg);
+}
+
+rclcpp::SubscriptionOptions ROS2SimulationManager::GetSetpointSubscriptionOptions() const
+{
+    rclcpp::SubscriptionOptions options;
+    options.callback_group = setpointCallbackGroup_;
+    return options;
 }
 
 std::unordered_map<std::string, rclcpp::ServiceBase::SharedPtr>& ROS2SimulationManager::GetServices()
@@ -208,10 +348,19 @@ void ROS2SimulationManager::BuildScenario()
     srvs_["enable_currents"] = nh_->create_service<std_srvs::srv::Trigger>("enable_currents", std::bind(&ROS2SimulationManager::EnableCurrentsService, this, _1, _2));
     srvs_["disable_currents"] = nh_->create_service<std_srvs::srv::Trigger>("disable_currents", std::bind(&ROS2SimulationManager::DisableCurrentsService, this, _1, _2));
     srvs_["respawn_robot"] = nh_->create_service<stonefish_ros2::srv::Respawn>("respawn_robot", std::bind(&ROS2SimulationManager::RespawnRobotService, this, _1, _2));
+
+    // Setpoint callbacks and queued images reference the scenario, so they only run while it exists
+    if(!setpointThread_.joinable())
+        setpointThread_ = std::thread([this]() { setpointExecutor_->spin(); });
+    if(!imageThread_.joinable())
+        StartImageThread();
 }
 
 void ROS2SimulationManager::DestroyScenario()
 {
+    StopSetpointThread();
+    StopImageThread();
+
     for(auto it = imgPubs_.begin(); it != imgPubs_.end(); ++it)
         it->second.shutdown();
 
@@ -221,6 +370,7 @@ void ROS2SimulationManager::DestroyScenario()
     srvs_.clear();
     cameraMsgPrototypes_.clear();
     sonarMsgPrototypes_.clear();
+    segmentationLabelsRevisions_.clear();
     rosRobots_.clear();
 
     SimulationManager::DestroyScenario();
@@ -230,15 +380,21 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
 {
     (void)timeStep; // Suppress warning
 
+    //Setpoints are applied every step, robot state is only published every stateDivider_ steps
+    bool publishState = stepCounter_++ % stateDivider_ == 0;
+
     ////////////////////////////////////////CLOCK////////////////////////////////////////////////
     if(clockPub_ != nullptr)
     {
         rcl_time_point_value_t t = (rcl_time_point_value_t)std::llround(GetSimulationTime() * Scalar(1e9));
         if(rcl_set_ros_time_override(clock_->get_clock_handle(), t) != RCL_RET_OK)
             RCLCPP_ERROR_STREAM_ONCE(nh_->get_logger(), "Failed to update the simulation clock!");
-        rosgraph_msgs::msg::Clock msg;
-        msg.clock = rclcpp::Time(t, RCL_ROS_TIME);
-        clockPub_->publish(msg);
+        if(publishState)
+        {
+            rosgraph_msgs::msg::Clock msg;
+            msg.clock = rclcpp::Time(t, RCL_ROS_TIME);
+            clockPub_->publish(msg);
+        }
     }
 
     ////////////////////////////////////////SENSORS//////////////////////////////////////////////
@@ -395,7 +551,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
     //////////////////////////////////////TRAJECTORIES/////////////////////////////////////////////
     id = 0;
     Entity* ent;
-    while((ent = GetEntity(id++)) != nullptr)
+    while(publishState && (ent = GetEntity(id++)) != nullptr)
     {
         if(ent->GetType() == EntityType::ANIMATED)
         {
@@ -422,14 +578,14 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
     }
 
     //////////////////////////////////////WORLD TRANSFORMS/////////////////////////////////////////
-    for(size_t i=0; i<rosRobots_.size(); ++i)
+    for(size_t i=0; publishState && i<rosRobots_.size(); ++i)
     {
         if(rosRobots_[i]->publishBaseLinkTransform_)
             interface_->PublishTF(tf_, rosRobots_[i]->robot_->GetTransform(), clock_->now(), "world_ned", rosRobots_[i]->robot_->GetName() + "/base_link");
     }
     
     //////////////////////////////////////SERVOS(JOINTS)/////////////////////////////////////////
-    for(size_t i=0; i<rosRobots_.size(); ++i)
+    for(size_t i=0; publishState && i<rosRobots_.size(); ++i)
     {
         if(pubs_.find(rosRobots_[i]->robot_->GetName() + "/motors") != pubs_.end())
         {
@@ -582,7 +738,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                         }
 
                         auto it = pubs_.find(actuator->GetName());
-                        if(it != pubs_.end())
+                        if(publishState && it != pubs_.end())
                         {
                             geometry_msgs::msg::WrenchStamped msg;
                             msg.header.stamp = clock_->now();
@@ -601,7 +757,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                         }
                             
                         auto it = pubs_.find(actuator->GetName()+"/wrench");
-                        if(it != pubs_.end())
+                        if(publishState && it != pubs_.end())
                         {
                             geometry_msgs::msg::WrenchStamped msg;
                             msg.header.stamp = clock_->now();
@@ -612,7 +768,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                         }            
 
                         it = pubs_.find(actuator->GetName()+"/joint_state");
-                        if(it != pubs_.end())
+                        if(publishState && it != pubs_.end())
                         {
                             //Publish propeller rotation for visualization
                             sensor_msgs::msg::JointState msg;
@@ -633,7 +789,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                         }
                             
                         auto it = pubs_.find(actuator->GetName()+"/wrench");
-                        if(it != pubs_.end())
+                        if(publishState && it != pubs_.end())
                         {
                             geometry_msgs::msg::WrenchStamped msg;
                             msg.header.stamp = clock_->now();
@@ -644,7 +800,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                         }            
 
                         it = pubs_.find(actuator->GetName()+"/joint_state");
-                        if(it != pubs_.end())
+                        if(publishState && it != pubs_.end())
                         {
                             //Publish propeller rotation for visualization
                             sensor_msgs::msg::JointState msg;
@@ -667,7 +823,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                         }
 
                         auto it = pubs_.find(actuator->GetName());
-                        if(it != pubs_.end())
+                        if(publishState && it != pubs_.end())
                         {
                             geometry_msgs::msg::WrenchStamped msg;
                             msg.header.stamp = clock_->now();
@@ -689,7 +845,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     case LinkActuatorType::VBS:
                     {
                         auto it = pubs_.find(actuator->GetName());
-                        if(it != pubs_.end())
+                        if(publishState && it != pubs_.end())
                         {
                             std_msgs::msg::Float64 msg;
                             msg.data = static_cast<VariableBuoyancy*>(actuator)->GetLiquidVolume();
@@ -700,7 +856,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     case LinkActuatorType::SUCTION_CUP:
                     {
                         auto it = pubs_.find(actuator->GetName());
-                        if(it != pubs_.end())
+                        if(publishState && it != pubs_.end())
                         {
                             std_msgs::msg::Bool msg;
                             msg.data = static_cast<SuctionCup*>(actuator)->GetPump();
@@ -711,7 +867,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     case LinkActuatorType::PLUGIN:
                     {
                         ROS2ActuatorPluginInterface* iface = dynamic_cast<ROS2ActuatorPluginInterface*>(actuator);
-                        if (iface != nullptr)
+                        if (publishState && iface != nullptr)
                             iface->Publish(nh_, pubs_);
                     }
                         break;
@@ -782,7 +938,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     case JointActuatorType::PLUGIN:
                     {
                         ROS2ActuatorPluginInterface* iface = dynamic_cast<ROS2ActuatorPluginInterface*>(actuator);
-                        if (iface != nullptr)
+                        if (publishState && iface != nullptr)
                             iface->Publish(nh_, pubs_);
                     }
                         break;
@@ -811,7 +967,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
     /////////////////////////////////// DEBUG //////////////////////////////////////////
     for(size_t i=0; i<rosRobots_.size(); ++i)
     {
-        if(pubs_.find(rosRobots_[i]->robot_->GetName() + "/debug/physics") != pubs_.end())
+        if(publishState && pubs_.find(rosRobots_[i]->robot_->GetName() + "/debug/physics") != pubs_.end())
         {
             Robot* r = rosRobots_[i]->robot_;
             size_t lID = 0;
@@ -905,41 +1061,44 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
 
 void ROS2SimulationManager::ColorCameraImageReady(ColorCamera* cam)
 {
-    //Fill in the image message
-    sensor_msgs::msg::Image::SharedPtr img = cameraMsgPrototypes_[cam->GetName()].first;
-    img->header.stamp = clock_->now();
-    memcpy(img->data.data(), (uint8_t*)cam->GetImageDataPointer(), img->step * img->height);
+    //Copy the image out of the GPU buffer, which is only mapped during this call
+    const std::string name = cam->GetName();
+    sensor_msgs::msg::Image::SharedPtr img = CopyImage(*cameraMsgPrototypes_[name].first, cam->GetImageDataPointer());
+    img->header.stamp = CaptureStamp(cam);
 
-    //Fill in the info message
-    sensor_msgs::msg::CameraInfo::SharedPtr info = cameraMsgPrototypes_[cam->GetName()].second;
+    auto info = std::make_shared<sensor_msgs::msg::CameraInfo>(*cameraMsgPrototypes_[name].second);
     info->header.stamp = img->header.stamp;
 
-    //Publish messages
-    imgPubs_.at(cam->GetName()).publish(img);
-    std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(cam->GetName() + "/info"))->publish(*info);
+    //Publishing (and compressing, for image_transport subscribers) is left to the image thread
+    PublishImageAsync(name, [this, name, img, info]()
+    {
+        imgPubs_.at(name).publish(img);
+        std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(name + "/info"))->publish(*info);
+    });
 }
 
 void ROS2SimulationManager::DepthCameraImageReady(DepthCamera* cam)
 {
-    //Fill in the image message
-    sensor_msgs::msg::Image::SharedPtr img = cameraMsgPrototypes_[cam->GetName()].first;
-    img->header.stamp = clock_->now();
-    memcpy(img->data.data(), (float*)cam->GetImageDataPointer(), img->step * img->height);
+    //As for colour cameras
+    const std::string name = cam->GetName();
+    sensor_msgs::msg::Image::SharedPtr img = CopyImage(*cameraMsgPrototypes_[name].first, cam->GetImageDataPointer());
+    img->header.stamp = CaptureStamp(cam);
 
-    //Fill in the info message
-    sensor_msgs::msg::CameraInfo::SharedPtr info = cameraMsgPrototypes_[cam->GetName()].second;
+    auto info = std::make_shared<sensor_msgs::msg::CameraInfo>(*cameraMsgPrototypes_[name].second);
     info->header.stamp = img->header.stamp;
 
-    //Publish messages
-    imgPubs_.at(cam->GetName()).publish(img);
-    std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(cam->GetName() + "/info"))->publish(*info);
+    PublishImageAsync(name, [this, name, img, info]()
+    {
+        imgPubs_.at(name).publish(img);
+        std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(name + "/info"))->publish(*info);
+    });
 }
 
 void ROS2SimulationManager::ThermalCameraImageReady(ThermalCamera* cam)
 {
     //Fill in the image message
     sensor_msgs::msg::Image::SharedPtr img = std::get<0>(dualImageCameraMsgPrototypes_[cam->GetName()]);
-    img->header.stamp = clock_->now();
+    img->header.stamp = CaptureStamp(cam);
     memcpy(img->data.data(), (float*)cam->GetImageDataPointer(), img->step * img->height);
 
     //Fill in the info message
@@ -961,7 +1120,7 @@ void ROS2SimulationManager::OpticalFlowCameraImageReady(OpticalFlowCamera* cam)
 {
     //Fill in the image message
     sensor_msgs::msg::Image::SharedPtr img = std::get<0>(dualImageCameraMsgPrototypes_[cam->GetName()]);
-    img->header.stamp = clock_->now();
+    img->header.stamp = CaptureStamp(cam);
     memcpy(img->data.data(), (float*)cam->GetImageDataPointer(), img->step * img->height);
 
     //Fill in the info message
@@ -981,24 +1140,25 @@ void ROS2SimulationManager::OpticalFlowCameraImageReady(OpticalFlowCamera* cam)
 
 void ROS2SimulationManager::SegmentationCameraImageReady(SegmentationCamera* cam)
 {
-    //Fill in the image message
-    sensor_msgs::msg::Image::SharedPtr img = std::get<0>(dualImageCameraMsgPrototypes_[cam->GetName()]);
-    img->header.stamp = clock_->now();
-    memcpy(img->data.data(), (uint16_t*)cam->GetImageDataPointer(), img->step * img->height);
+    //As for colour cameras, with the labels and their display image
+    const std::string name = cam->GetName();
+    auto& prototypes = dualImageCameraMsgPrototypes_[name];
+    sensor_msgs::msg::Image::SharedPtr img = CopyImage(*std::get<0>(prototypes), cam->GetImageDataPointer());
+    img->header.stamp = CaptureStamp(cam);
+    PublishSegmentationLabels(name, img->header);
 
-    //Fill in the info message
-    sensor_msgs::msg::CameraInfo::SharedPtr info = std::get<1>(dualImageCameraMsgPrototypes_[cam->GetName()]);
+    auto info = std::make_shared<sensor_msgs::msg::CameraInfo>(*std::get<1>(prototypes));
     info->header.stamp = img->header.stamp;
 
-    //Fill in the display message
-    sensor_msgs::msg::Image::SharedPtr img2 = std::get<2>(dualImageCameraMsgPrototypes_[cam->GetName()]);
+    sensor_msgs::msg::Image::SharedPtr img2 = CopyImage(*std::get<2>(prototypes), cam->GetDisplayDataPointer());
     img2->header.stamp = img->header.stamp;
-    memcpy(img2->data.data(), (uint8_t*)cam->GetDisplayDataPointer(), img2->step * img2->height);
 
-    //Publish messages
-    imgPubs_.at(cam->GetName()).publish(img);
-    std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(cam->GetName() + "/info"))->publish(*info);
-    imgPubs_.at(cam->GetName()+"/display").publish(img2);
+    PublishImageAsync(name, [this, name, img, info, img2]()
+    {
+        imgPubs_.at(name).publish(img);
+        std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(name + "/info"))->publish(*info);
+        imgPubs_.at(name + "/display").publish(img2);
+    });
 }
 
 void ROS2SimulationManager::EventBasedCameraOutputReady(EventBasedCamera* cam)
