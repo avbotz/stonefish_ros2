@@ -877,7 +877,7 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
                 {
                     case VisionSensorType::COLOR_CAMERA:
                     {
-                        img_pubs[sensorName] = it->advertise(topicStr + "/image_color", queueSize);
+                        img_pubs[sensorName] = it->advertise(topicStr + "/image_raw", queueSize);
                         pubs[sensorName + "/info"] = nh_->create_publisher<sensor_msgs::msg::CameraInfo>(topicStr + "/camera_info", queueSize);
                         ColorCamera* cam = (ColorCamera*)sens;
                         cam->InstallNewDataHandler(std::bind(&ROS2SimulationManager::ColorCameraImageReady, sim, _1));
