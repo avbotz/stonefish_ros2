@@ -102,6 +102,8 @@ Message type: ``sensor_msgs::msg::LaserScan``
 Vision sensors
 ==============
 
+Color, depth and segmentation cameras whose images nobody subscribes to, in any ``image_transport`` transport, are turned off (checked every 0.5 s), so that they are not rendered; their ``camera_info`` keeps being published at their rate. While a segmentation camera is used, all of them are on, as it is rendered together with the camera it is paired with. A camera turned off through its ``set_enabled`` service stays off.
+
 Color camera
 ------------
 

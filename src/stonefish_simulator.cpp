@@ -45,7 +45,9 @@ public:
             std::make_unique<sf::ROS2SimulationManager>(rate, scenarioPath,
                 std::shared_ptr<rclcpp::Node>(this, [](rclcpp::Node*) {})));
         app_->Startup();
-        tickTimer_ = this->create_wall_timer(16667us, std::bind(&sf::ROS2GraphicalSimulationApp::Tick, app_.get()));
+        //Ticks that have nothing to render return at once (the app renders on demand), so a short period picks up
+        //each sensor camera as soon as it is due, instead of at the next 60 Hz frame
+        tickTimer_ = this->create_wall_timer(4ms, std::bind(&sf::ROS2GraphicalSimulationApp::Tick, app_.get()));
     };
 
     void Shutdown()
