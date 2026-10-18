@@ -32,6 +32,7 @@ namespace sf
 ROS2GraphicalSimulationApp::ROS2GraphicalSimulationApp(std::string title, std::string dataPath, RenderSettings s, HelperSettings h, std::unique_ptr<ROS2SimulationManager> sim)
     : GraphicalSimulationApp(title, dataPath, s, h, std::move(sim))
 {
+    renderOnDemand_ = true; //Tick() is called at a high rate
 }
 
 void ROS2GraphicalSimulationApp::Startup()

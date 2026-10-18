@@ -346,6 +346,9 @@ void ROS2SimulationManager::BuildScenario()
     srvs_["disable_currents"] = nh_->create_service<std_srvs::srv::Trigger>("disable_currents", std::bind(&ROS2SimulationManager::DisableCurrentsService, this, _1, _2));
     srvs_["respawn_robot"] = nh_->create_service<stonefish_ros2::srv::Respawn>("respawn_robot", std::bind(&ROS2SimulationManager::RespawnRobotService, this, _1, _2));
 
+    // Cameras nobody subscribes to are not rendered
+    cameraUseTimer_ = nh_->create_wall_timer(std::chrono::milliseconds(500), std::bind(&ROS2SimulationManager::UpdateCameraUse, this));
+
     // Setpoint callbacks and queued images reference the scenario, so they only run while it exists
     if(!setpointThread_.joinable())
         setpointThread_ = std::thread([this]() { setpointExecutor_->spin(); });
@@ -355,6 +358,7 @@ void ROS2SimulationManager::BuildScenario()
 
 void ROS2SimulationManager::DestroyScenario()
 {
+    cameraUseTimer_.reset();
     StopSetpointThread();
     StopImageThread();
 
@@ -398,6 +402,12 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
     Sensor* sensor;
     while((sensor = getSensor(id++)) != nullptr)
     {
+        if(sensor->getType() == SensorType::VISION && !sensor->isEnabled())
+        {
+            PublishIdleCameraInfo(sensor, timeStep);
+            continue;
+        }
+
         if(!sensor->isNewDataAvailable())
             continue;
 
@@ -1049,6 +1059,81 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
     }
 }
 
+void ROS2SimulationManager::UpdateCameraUse()
+{
+    //A camera whose images nobody subscribes to, in any transport, is turned off, so that it is not rendered, and only its
+    //camera_info is published. A segmentation camera is rendered together with the camera it is paired with, so while one
+    //is used all cameras are on.
+    auto used = [this](const std::string& name)
+    {
+        size_t subscribers = 0;
+        for(const std::string& key : {name, name + "/display"})
+        {
+            auto it = imgPubs_.find(key);
+            if(it != imgPubs_.end())
+                subscribers += it->second.getNumSubscribers();
+        }
+        return subscribers > 0;
+    };
+
+    std::vector<VisionSensor*> cameras;
+    bool segmentationUsed = false;
+    unsigned int id = 0;
+    Sensor* sensor;
+    while((sensor = getSensor(id++)) != nullptr)
+    {
+        if(sensor->getType() != SensorType::VISION)
+            continue;
+        VisionSensor* cam = (VisionSensor*)sensor;
+        VisionSensorType type = cam->getVisionSensorType();
+        if(type != VisionSensorType::COLOR_CAMERA && type != VisionSensorType::DEPTH_CAMERA 
+           && type != VisionSensorType::SEGMENTATION_CAMERA)
+            continue;
+        cameras.push_back(cam);
+        segmentationUsed |= type == VisionSensorType::SEGMENTATION_CAMERA && used(cam->getName());
+    }
+
+    std::lock_guard<std::mutex> lock(cameraUseMutex_);
+    for(VisionSensor* cam : cameras)
+    {
+        bool enabled = disabledSensors_.count(cam->getName()) == 0 && (used(cam->getName()) 
+            || (segmentationUsed && cam->getVisionSensorType() != VisionSensorType::SEGMENTATION_CAMERA));
+        if(enabled != cam->isEnabled())
+            cam->setEnabled(enabled);
+    }
+}
+
+void ROS2SimulationManager::PublishIdleCameraInfo(Sensor* sens, Scalar timeStep)
+{
+    //A camera turned off for lack of subscribers keeps publishing its camera_info at its rate
+    const std::string& name = sens->getName();
+    auto pub = pubs_.find(name + "/info");
+    if(pub == pubs_.end() || sens->getUpdateFrequency() <= Scalar(0))
+        return;
+    {
+        std::lock_guard<std::mutex> lock(cameraUseMutex_);
+        if(disabledSensors_.count(name) > 0)
+            return;
+    }
+    Scalar& elapsed = idleCameraInfoTime_[name];
+    elapsed += timeStep;
+    Scalar period = Scalar(1)/sens->getUpdateFrequency();
+    if(elapsed < period)
+        return;
+    elapsed -= period;
+
+    sensor_msgs::msg::CameraInfo::SharedPtr prototype;
+    if(cameraMsgPrototypes_.count(name) > 0)
+        prototype = cameraMsgPrototypes_.at(name).second;
+    else if(dualImageCameraMsgPrototypes_.count(name) > 0)
+        prototype = std::get<1>(dualImageCameraMsgPrototypes_.at(name));
+    if(prototype == nullptr)
+        return;
+    sensor_msgs::msg::CameraInfo info = *prototype;
+    info.header.stamp = clock_->now();
+    std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pub->second)->publish(info);
+}
+
 void ROS2SimulationManager::ColorCameraImageReady(ColorCamera* cam)
 {
     //Copy the image out of the GPU buffer, which is only mapped during this call
@@ -1351,6 +1436,13 @@ void ROS2SimulationManager::SuctionCupService(const std_srvs::srv::SetBool::Requ
 void ROS2SimulationManager::SensorService(const std_srvs::srv::SetBool::Request::SharedPtr req,
                                         std_srvs::srv::SetBool::Response::SharedPtr res, Sensor* sens)
 {
+    {
+        std::lock_guard<std::mutex> lock(cameraUseMutex_);
+        if(req->data)
+            disabledSensors_.erase(sens->getName());
+        else
+            disabledSensors_.insert(sens->getName());
+    }
     sens->setEnabled(req->data);
     if(req->data)
         res->message = "Sensor turned on.";

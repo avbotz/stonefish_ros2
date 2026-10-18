@@ -44,7 +44,9 @@ public:
         app_ = std::shared_ptr<sf::ROS2GraphicalSimulationApp>(new sf::ROS2GraphicalSimulationApp("Stonefish Simulator", 
                                                                                                  dataPath, s, h, std::move(manager)));
         app_->Startup();
-        tickTimer_ = this->create_wall_timer(16667us, std::bind(&sf::ROS2GraphicalSimulationApp::Tick, app_));
+        //Ticks that have nothing to render return at once (the app renders on demand), so a short period picks up
+        //each sensor camera as soon as it is due, instead of at the next 60 Hz frame
+        tickTimer_ = this->create_wall_timer(4ms, std::bind(&sf::ROS2GraphicalSimulationApp::Tick, app_));
     };
 
 private:

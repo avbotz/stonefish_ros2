@@ -29,6 +29,7 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <set>
 #include <thread>
 #include "rclcpp/rclcpp.hpp"
 #include "image_transport/image_transport.hpp"
@@ -187,6 +188,8 @@ namespace sf
         void StartImageThread();
         void StopImageThread();
         void StopSetpointThread();
+        void UpdateCameraUse();
+        void PublishIdleCameraInfo(Sensor* sens, Scalar timeStep);
 
     protected:
         std::string scenarioPath_;
@@ -220,6 +223,11 @@ namespace sf
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, 
             sensor_msgs::msg::Image::SharedPtr>> sonarMsgPrototypes_;
         std::map<std::string, unsigned int> segmentationLabelsRevisions_; //Revision of the labels last published for each segmentation camera
+        //Cameras whose images nobody subscribes to are not rendered (see UpdateCameraUse)
+        rclcpp::TimerBase::SharedPtr cameraUseTimer_;
+        std::mutex cameraUseMutex_;
+        std::set<std::string> disabledSensors_; //Turned off through their set_enabled service
+        std::map<std::string, Scalar> idleCameraInfoTime_; //Since the camera_info of an unrendered camera was published [s]
     };
 }
 
