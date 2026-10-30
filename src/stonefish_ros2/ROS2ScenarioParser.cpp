@@ -202,11 +202,11 @@ std::unique_ptr<VelocityField> ROS2ScenarioParser::ParseVelocityField(XMLElement
     VelocityField* vf = vfPtr.get();
     if(vf != nullptr)
     {
-        ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+        ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& subs = sim->getSubscribers();
         XMLElement* item;
 
-        switch(vf->getType())
+        switch(vf->GetType())
         {
             case VelocityFieldType::UNIFORM:
             {
@@ -248,7 +248,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
     if(!ScenarioParser::ParseRobot(element))
         return false;
 
-    ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+    ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
     std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();
     std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& subs = sim->getSubscribers();
     
@@ -256,7 +256,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
     const char* name = nullptr;
     element->QueryStringAttribute("name", &name);
     std::string nameStr(name);
-    Robot* robot = getSimulationManager()->getRobot(nameStr);
+    Robot* robot = GetSimulationManager()->GetRobot(nameStr);
 
     //Check actuators
     unsigned int nThrusters = 0;
@@ -267,11 +267,11 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
 
     unsigned int aID = 0;
     Actuator* act;
-    while((act = robot->getActuator(aID++)) != NULL)
+    while((act = robot->GetActuator(aID++)) != NULL)
     {
-        if(act->getType() == ActuatorType::LINK)
+        if(act->GetType() == ActuatorType::LINK)
         {
-            switch(static_cast<LinkActuator*>(act)->getLinkActuatorType())
+            switch(static_cast<LinkActuator*>(act)->GetLinkActuatorType())
             {
                 case LinkActuatorType::SIMPLE_THRUSTER:
                 case LinkActuatorType::THRUSTER:
@@ -292,7 +292,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
         }
         else
         {
-            switch(static_cast<JointActuator*>(act)->getJointActuatorType())
+            switch(static_cast<JointActuator*>(act)->GetJointActuatorType())
             {
                 case JointActuatorType::MOTOR:
                 case JointActuatorType::DCMOTOR:
@@ -321,7 +321,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
     {
         const char* topicPhysics = nullptr;
         if(item->QueryStringAttribute("physics", &topicPhysics) == XML_SUCCESS)
-            pubs[robot->getName() + "/debug/physics"] = nh_->create_publisher<stonefish_ros2::msg::DebugPhysics>(std::string(topicPhysics), 10);
+            pubs[robot->GetName() + "/debug/physics"] = nh_->create_publisher<stonefish_ros2::msg::DebugPhysics>(std::string(topicPhysics), 10);
     }
 
     //Save robot
@@ -339,35 +339,35 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
         {
             std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::ThrustersCallback, sim, _1, rosRobot);
-            subs[robot->getName() + "/thrusters"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicThrust), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
+            subs[robot->GetName() + "/thrusters"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicThrust), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
         }
 
         if(nPropellers > 0 && item->QueryStringAttribute("propellers", &topicProp) == XML_SUCCESS)
         {
             std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::PropellersCallback, sim, _1, rosRobot);
-            subs[robot->getName() + "/propellers"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicProp), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
+            subs[robot->GetName() + "/propellers"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicProp), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
         }
 
         if(nRudders > 0 && item->QueryStringAttribute("rudders", &topicRudder) == XML_SUCCESS)
         {
             std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::RuddersCallback, sim, _1, rosRobot);
-            subs[robot->getName() + "/rudders"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicRudder), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
+            subs[robot->GetName() + "/rudders"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicRudder), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
         }
 
         if(nServos > 0 && item->QueryStringAttribute("servos", &topicSrv) == XML_SUCCESS)
         {
             std::function<void(const sensor_msgs::msg::JointState::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::ServosCallback, sim, _1, rosRobot);
-            subs[robot->getName() + "/servos"] = nh_->create_subscription<sensor_msgs::msg::JointState>(std::string(topicSrv), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
+            subs[robot->GetName() + "/servos"] = nh_->create_subscription<sensor_msgs::msg::JointState>(std::string(topicSrv), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
             //Generate setpoint placeholders for the whole system
             aID = 0;
-            while((act = robot->getActuator(aID++)) != nullptr)
+            while((act = robot->GetActuator(aID++)) != nullptr)
             {
-                if(act->getType() == ActuatorType::JOINT
-                   && static_cast<JointActuator*>(act)->getJointActuatorType() == JointActuatorType::SERVO)
-                    rosRobot->servoSetpoints_[((Servo*)act)->getJointName()] = std::pair(ServoControlMode::VELOCITY, Scalar(0));
+                if(act->GetType() == ActuatorType::JOINT
+                   && static_cast<JointActuator*>(act)->GetJointActuatorType() == JointActuatorType::SERVO)
+                    rosRobot->servoSetpoints_[((Servo*)act)->GetJointName()] = std::pair(ServoControlMode::VELOCITY, Scalar(0));
             }
         }
     }
@@ -403,7 +403,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
             {
                 const char* jgJointName = nullptr;
                 if(joint->QueryStringAttribute("name", &jgJointName) == XML_SUCCESS)
-                    jointNames.push_back(robot->getName() + "/" + std::string(jgJointName));
+                    jointNames.push_back(robot->GetName() + "/" + std::string(jgJointName));
             }
 
             if(jointNames.size() > 0) // Any joints defined?
@@ -413,7 +413,7 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
                     rosRobot->servoSetpoints_[jointNames[i]] = std::make_pair(mode, Scalar(0));
                 std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::JointGroupCallback, sim, _1, rosRobot, mode, jointNames);
-                subs[robot->getName() + "/joint_group" + std::to_string(jg)] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(jgTopic), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
+                subs[robot->GetName() + "/joint_group" + std::to_string(jg)] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(jgTopic), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
                 ++jg;
             }
         }
@@ -438,11 +438,11 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
                     continue; //Skip joint group -> missing parameters
                 
                 RCLCPP_INFO_STREAM(nh_->get_logger(), "Creating joint subscriber (" << modeStr << ") " << std::string(jgTopic));
-                std::string jointNameStr = robot->getName() + "/" + std::string(jointName);
+                std::string jointNameStr = robot->GetName() + "/" + std::string(jointName);
                 rosRobot->servoSetpoints_[jointNameStr] = std::make_pair(mode, Scalar(0));
                 std::function<void(const std_msgs::msg::Float64::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::JointCallback, sim, _1, rosRobot, mode, jointNameStr);
-                subs[robot->getName() + "/joint" + std::to_string(jg)] = nh_->create_subscription<std_msgs::msg::Float64>(std::string(jgTopic), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
+                subs[robot->GetName() + "/joint" + std::to_string(jg)] = nh_->create_subscription<std_msgs::msg::Float64>(std::string(jgTopic), 10, callbackFunc, sim->getSetpointSubscriptionOptions());
                 ++jg;
             }
         }
@@ -457,16 +457,16 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
         const char* topicRud = nullptr;
 
         if(nThrusters > 0 && item->QueryStringAttribute("thrusters", &topicThr) == XML_SUCCESS)
-            pubs[robot->getName() + "/thrusters"] = nh_->create_publisher<stonefish_ros2::msg::ThrusterState>(std::string(topicThr), 10);
+            pubs[robot->GetName() + "/thrusters"] = nh_->create_publisher<stonefish_ros2::msg::ThrusterState>(std::string(topicThr), 10);
 
         if(nServos > 0 && item->QueryStringAttribute("servos", &topicSrv) == XML_SUCCESS)
-            pubs[robot->getName() + "/servos"] = nh_->create_publisher<sensor_msgs::msg::JointState>(std::string(topicSrv), 10);
+            pubs[robot->GetName() + "/servos"] = nh_->create_publisher<sensor_msgs::msg::JointState>(std::string(topicSrv), 10);
 
         if(nMotors > 0 && item->QueryStringAttribute("motors", &topicMtr) == XML_SUCCESS)
-            pubs[robot->getName() + "/motors"] = nh_->create_publisher<sensor_msgs::msg::JointState>(std::string(topicMtr), 10);
+            pubs[robot->GetName() + "/motors"] = nh_->create_publisher<sensor_msgs::msg::JointState>(std::string(topicMtr), 10);
 
         if(nRudders > 0 && item->QueryStringAttribute("rudders", &topicRud) == XML_SUCCESS)
-            pubs[robot->getName() + "/rudders"] = nh_->create_publisher<sensor_msgs::msg::JointState>(std::string(topicRud), 10);
+            pubs[robot->GetName() + "/rudders"] = nh_->create_publisher<sensor_msgs::msg::JointState>(std::string(topicRud), 10);
     }
 
     return true;
@@ -477,7 +477,7 @@ bool ROS2ScenarioParser::ParseAnimated(XMLElement* element)
     if(!ScenarioParser::ParseAnimated(element))
         return false;
 
-    ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+    ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
     std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();
     std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& subs = sim->getSubscribers();
 
@@ -501,11 +501,11 @@ bool ROS2ScenarioParser::ParseAnimated(XMLElement* element)
         {
             return true;
         }
-        AnimatedEntity* anim = (AnimatedEntity*)sim->getEntity(nameStr);
+        AnimatedEntity* anim = (AnimatedEntity*)sim->GetEntity(nameStr);
         if(anim != nullptr)
         {
             std::function<void(const nav_msgs::msg::Odometry::SharedPtr msg)> callbackFunc =
-                std::bind(&ROS2SimulationManager::TrajectoryCallback, sim, _1, (ManualTrajectory*)anim->getTrajectory());
+                std::bind(&ROS2SimulationManager::TrajectoryCallback, sim, _1, (ManualTrajectory*)anim->GetTrajectory());
             subs[nameStr + "/odometry"] = nh_->create_subscription<nav_msgs::msg::Odometry>(std::string(topic), 10, callbackFunc);
         }
     }
@@ -525,20 +525,20 @@ bool ROS2ScenarioParser::ParseAnimated(XMLElement* element)
     return true;
 }
 
-std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XMLElement* element, const std::string& namePrefix)
+std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XMLElement* element, std::string_view namePrefix)
 {
     std::unique_ptr<Actuator, ActuatorDeleter> actPtr = ScenarioParser::ParseActuator(element, namePrefix);
     Actuator* act = actPtr.get();
     
-    if(act != nullptr && act->getType() == ActuatorType::LINK) //Only link actuators are handled here
+    if(act != nullptr && act->GetType() == ActuatorType::LINK) //Only link actuators are handled here
     {
-        ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+        ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
         std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& subs = sim->getSubscribers();
         std::map<std::string, rclcpp::ServiceBase::SharedPtr>& srvs = sim->getServices();
-        std::string actuatorName = act->getName();
+        std::string actuatorName = act->GetName();
         XMLElement* item;
-        LinkActuatorType linkType = static_cast<LinkActuator*>(act)->getLinkActuatorType();
+        LinkActuatorType linkType = static_cast<LinkActuator*>(act)->GetLinkActuatorType();
         //Actuator specific handling
         switch(linkType)
         {
@@ -702,14 +702,14 @@ std::unique_ptr<Actuator, ActuatorDeleter> ROS2ScenarioParser::ParseActuator(XML
     return actPtr;
 }
 
-std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& namePrefix)
+std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElement* element, std::string_view namePrefix)
 {
     std::unique_ptr<Sensor, SensorDeleter> sensPtr = ScenarioParser::ParseSensor(element, namePrefix);
     Sensor* sens = sensPtr.get();
     
     if(sens != nullptr)
     {
-        ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+        ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
         std::shared_ptr<image_transport::ImageTransport> it = sim->getImageTransportHandle();
         std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& subs = sim->getSubscribers();
@@ -720,7 +720,7 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::Image::SharedPtr>>& sonarMsgProto = sim->getSonarMsgPrototypes();
         
         //Publishing info
-        std::string sensorName = sens->getName();
+        std::string sensorName = sens->GetName();
         XMLElement* item;
         const char* topic = nullptr;
         const char* frameId = nullptr;
@@ -752,17 +752,17 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
                             std_srvs::srv::SetBool::Response::SharedPtr res)> callbackFunc =
                             std::bind(&ROS2SimulationManager::SensorService, sim, _1, _2, sens);
             srvs[sensorName+"/set_enabled"] = nh_->create_service<std_srvs::srv::SetBool>(serviceTopicStr, callbackFunc);
-            sens->setEnabled(false); // Sensor with an enable service starts as disabled
+            sens->SetEnabled(false); // Sensor with an enable service starts as disabled
         }
 
-        unsigned int queueSize = (unsigned int)ceil(sens->getUpdateFrequency());
+        unsigned int queueSize = (unsigned int)ceil(sens->GetUpdateFrequency());
 
         //Generate publishers for different sensor types
-        switch(sens->getType())
+        switch(sens->GetType())
         {
             case SensorType::JOINT:
             {
-                switch(((ScalarSensor*)sens)->getScalarSensorType())
+                switch(((ScalarSensor*)sens)->GetScalarSensorType())
                 {
                     case ScalarSensorType::FT:
                         pubs[sensorName] = nh_->create_publisher<geometry_msgs::msg::WrenchStamped>(topicStr, queueSize);
@@ -782,7 +782,7 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
 
             case SensorType::LINK:
             {
-                switch(((ScalarSensor*)sens)->getScalarSensorType())
+                switch(((ScalarSensor*)sens)->GetScalarSensorType())
                 {
                     case ScalarSensorType::ACC:
                         pubs[sensorName] = nh_->create_publisher<geometry_msgs::msg::AccelWithCovarianceStamped>(topicStr, queueSize);
@@ -873,7 +873,7 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
 
             case SensorType::VISION:
             {
-                switch(((VisionSensor*)sens)->getVisionSensorType())
+                switch(((VisionSensor*)sens)->GetVisionSensorType())
                 {
                     case VisionSensorType::COLOR_CAMERA:
                     {
@@ -1015,16 +1015,16 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
     return sensPtr;
 }
 
-std::unique_ptr<Comm, CommDeleter> ROS2ScenarioParser::ParseComm(XMLElement* element, const std::string& namePrefix)
+std::unique_ptr<Comm, CommDeleter> ROS2ScenarioParser::ParseComm(XMLElement* element, std::string_view namePrefix)
 {
     std::unique_ptr<Comm, CommDeleter> commPtr = ScenarioParser::ParseComm(element, namePrefix);
     Comm* comm = commPtr.get();
     if(comm != nullptr)
     {
-        ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+        ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
         std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& subs = sim->getSubscribers();
-        std::string commName = comm->getName();
+        std::string commName = comm->GetName();
 
         //Publishing info
         XMLElement* item;
@@ -1044,7 +1044,7 @@ std::unique_ptr<Comm, CommDeleter> ROS2ScenarioParser::ParseComm(XMLElement* ele
             return commPtr;
 
         //Generate publishers for different comm types
-        switch(comm->getType())
+        switch(comm->GetType())
         {
             case CommType::ACOUSTIC:
             {
@@ -1107,14 +1107,14 @@ std::unique_ptr<Comm, CommDeleter> ROS2ScenarioParser::ParseComm(XMLElement* ele
     return commPtr;
 }
 
-std::unique_ptr<Light> ROS2ScenarioParser::ParseLight(XMLElement* element, const std::string& namePrefix)
+std::unique_ptr<Light> ROS2ScenarioParser::ParseLight(XMLElement* element, std::string_view namePrefix)
 {
     std::unique_ptr<Light> lPtr = ScenarioParser::ParseLight(element, namePrefix);
     Light* l = lPtr.get();
     
     if(l != nullptr)
     {
-        ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+        ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
         XMLElement* item;
 
         //Online update of light origin frame
@@ -1125,7 +1125,7 @@ std::unique_ptr<Light> ROS2ScenarioParser::ParseLight(XMLElement* element, const
             std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& subs = sim->getSubscribers();
             std::function<void(const geometry_msgs::msg::Transform::SharedPtr msg)> callbackFunc =
                         std::bind(&ROS2SimulationManager::ActuatorOriginCallback, sim, _1, (Actuator*)l);
-            subs[l->getName()] = nh_->create_subscription<geometry_msgs::msg::Transform>(std::string(originTopic), 10, callbackFunc);
+            subs[l->GetName()] = nh_->create_subscription<geometry_msgs::msg::Transform>(std::string(originTopic), 10, callbackFunc);
         }
 
         //Service for switching the light
@@ -1136,7 +1136,7 @@ std::unique_ptr<Light> ROS2ScenarioParser::ParseLight(XMLElement* element, const
             std::map<std::string, rclcpp::ServiceBase::SharedPtr>& srvs = sim->getServices();
             std::function<void(const std_srvs::srv::SetBool::Request::SharedPtr req, std_srvs::srv::SetBool::Response::SharedPtr res)> 
                 callbackFunc = std::bind(&ROS2SimulationManager::LightService, sim, _1, _2, l);
-            srvs[l->getName()] = nh_->create_service<std_srvs::srv::SetBool>(std::string(switchTopic), callbackFunc);
+            srvs[l->GetName()] = nh_->create_service<std_srvs::srv::SetBool>(std::string(switchTopic), callbackFunc);
         }
     }
     return lPtr;
@@ -1147,7 +1147,7 @@ bool ROS2ScenarioParser::ParseContact(XMLElement* element)
     if(!ScenarioParser::ParseContact(element))
         return false;
    
-    ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+    ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
     std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();
     
     //Contact info
@@ -1181,11 +1181,11 @@ FixedJoint* ROS2ScenarioParser::ParseGlue(XMLElement* element)
             return glue;
         }
 
-        ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+        ROS2SimulationManager* sim = (ROS2SimulationManager*)GetSimulationManager();
         std::map<std::string, rclcpp::ServiceBase::SharedPtr>& srvs = sim->getServices();
         std::function<void(const std_srvs::srv::SetBool::Request::SharedPtr req, std_srvs::srv::SetBool::Response::SharedPtr res)> callbackFunc =
             std::bind(&ROS2SimulationManager::GlueService, sim, _1, _2, glue);
-        srvs[glue->getName()] = nh_->create_service<std_srvs::srv::SetBool>(std::string(topic), callbackFunc);
+        srvs[glue->GetName()] = nh_->create_service<std_srvs::srv::SetBool>(std::string(topic), callbackFunc);
     }
     return glue;
 }
