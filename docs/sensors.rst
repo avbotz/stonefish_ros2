@@ -115,6 +115,15 @@ Message type: ``sensor_msgs::msg::Image``
 
 Second message type: ``sensor_msgs::msg::CameraInfo``
 
+The camera info contains the distortion coefficients of the lens, if they were defined for the camera. A real camera that streams compressed video delivers images with compression artifacts. To reproduce them, the optional attribute ``jpeg_quality`` (1-100) of the ``ros_publisher`` tag makes every image go through JPEG compression and back before it is published, with the 4:2:2 chroma subsampling used by cameras streaming MJPEG. It is done in the thread that publishes the images.
+
+.. code-block:: xml
+
+    <sensor name="..." type="camera">
+        <!-- standard sensor definitions -->
+        <ros_publisher topic="/camera" jpeg_quality="60"/>
+    </sensor>
+
 Depth camera
 ------------
 
@@ -150,6 +159,18 @@ Second message type: ``sensor_msgs::msg::CameraInfo``
 Third message type: ``sensor_msgs::msg::Image``
 
 Fourth message type: ``vision_msgs::msg::LabelInfo``, latched on ``<topic>/label_info``. It names the object (entity, sensor, actuator or communication device) drawn with each pixel value of the image; 0 is the background and ``ocean_particles`` marks the marine snow. It is published again whenever objects are added.
+
+Fifth message type (*boxes_topic*): ``vision_msgs::msg::Detection2DArray``
+
+The fifth message holds the bounding boxes of the objects visible in the image, named like in the label info message, e.g., to annotate the images of a paired color camera for training of object detectors. Objects with fewer visible pixels than the optional attribute ``boxes_min_pixels`` are left out.
+
+.. code-block:: xml
+
+    <sensor name="..." type="segmentation">
+        <!-- standard sensor definitions -->
+        <paired_camera name="..."/>
+        <ros_publisher topic="/segmentation" boxes_topic="/segmentation/boxes" boxes_min_pixels="50"/>
+    </sensor>
 
 Event-based camera
 ------------------

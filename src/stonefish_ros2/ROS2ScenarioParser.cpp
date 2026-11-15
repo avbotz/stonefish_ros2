@@ -51,6 +51,7 @@
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "vision_msgs/msg/label_info.hpp"
+#include "vision_msgs/msg/detection2_d_array.hpp"
 #include "stonefish_ros2/msg/int32_stamped.hpp"
 #include "stonefish_ros2/msg/beacon_info.hpp"
 #include "stonefish_ros2/msg/dvl.hpp"
@@ -913,6 +914,12 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
                         ColorCamera* cam = static_cast<ColorCamera*>(sens.get());
                         cam->InstallNewDataHandler(std::bind(&ROS2SimulationManager::ColorCameraImageReady, sim, _1));
                         camMsgProto[sensorName] = ROS2Interface::GenerateCameraMsgPrototypes(cam, false, frameIdStr);
+                        //Distortion of the lens (plumb bob model)
+                        std::array<Scalar, 5> distortion = cam->GetDistortion();
+                        camMsgProto[sensorName].second->d.assign(distortion.begin(), distortion.end());
+                        //Images compressed and decompressed like the frames of a camera streaming MJPEG
+                        if (auto jpeg = pubTopics.find("jpeg_quality"); jpeg != pubTopics.end())
+                            sim->SetCameraJpegQuality(sensorName, std::atoi(jpeg->second.c_str()));
                     }
                 }
                     break;
@@ -963,6 +970,13 @@ std::unique_ptr<Sensor, SensorDeleter> ROS2ScenarioParser::ParseSensor(XMLElemen
                         pubs[sensorName + "/info"] = nh_->create_publisher<sensor_msgs::msg::CameraInfo>(it->second + "/camera_info", queueSize);                        
                         //Names of the pixel values, latched as they only change when objects are added
                         pubs[sensorName + "/labels"] = nh_->create_publisher<vision_msgs::msg::LabelInfo>(it->second + "/label_info", rclcpp::QoS(1).transient_local());
+                        //Bounding boxes of the objects visible in the image
+                        if (auto boxes = pubTopics.find("boxes_topic"); boxes != pubTopics.end())
+                        {
+                            pubs[sensorName + "/boxes"] = nh_->create_publisher<vision_msgs::msg::Detection2DArray>(boxes->second, queueSize);
+                            if (auto minPixels = pubTopics.find("boxes_min_pixels"); minPixels != pubTopics.end())
+                                sim->SetSegmentationMinPixels(sensorName, (unsigned int)std::max(std::atoi(minPixels->second.c_str()), 1));
+                        }
                         SegmentationCamera* cam = static_cast<SegmentationCamera*>(sens.get());
                         cam->InstallNewDataHandler(std::bind(&ROS2SimulationManager::SegmentationCameraImageReady, sim, _1));
                         dualCamMsgProto[sensorName] = ROS2Interface::GenerateSegmentationCameraMsgPrototypes(cam);

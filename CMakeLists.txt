@@ -32,6 +32,8 @@ find_package(image_transport REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(Stonefish REQUIRED 1.6.0)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg) # JPEG compression of camera images
 
 # messages
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -69,7 +71,7 @@ target_include_directories(stonefish_ros2_interface PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_include_directories(stonefish_ros2_interface SYSTEM PRIVATE ${PCL_INCLUDE_DIRS})
 target_compile_options(stonefish_ros2_interface PRIVATE ${PCL_DEFINITIONS})
-target_link_libraries(stonefish_ros2_interface PRIVATE ${PCL_LIBRARIES})
+target_link_libraries(stonefish_ros2_interface PRIVATE ${PCL_LIBRARIES} PkgConfig::TURBOJPEG)
 ament_target_dependencies(stonefish_ros2_interface PUBLIC
  rclcpp 
  ament_index_cpp 

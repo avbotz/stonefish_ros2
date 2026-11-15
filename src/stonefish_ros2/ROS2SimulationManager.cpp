@@ -38,6 +38,8 @@
 #include "std_msgs/msg/bool.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp"
 #include "vision_msgs/msg/label_info.hpp"
+#include "vision_msgs/msg/detection2_d_array.hpp"
+#include <turbojpeg.h>
 
 #include <Stonefish/entities/animation/ManualTrajectory.h>
 #include <Stonefish/entities/forcefields/Uniform.h>
@@ -243,6 +245,36 @@ sensor_msgs::msg::Image::SharedPtr ROS2SimulationManager::CopyImage(const sensor
     return img;
 }
 
+void ROS2SimulationManager::SetCameraJpegQuality(const std::string& camera, int quality)
+{
+    cameraJpegQuality_[camera] = std::clamp(quality, 1, 100);
+}
+
+void ROS2SimulationManager::SetSegmentationMinPixels(const std::string& camera, unsigned int minPixels)
+{
+    segmentationMinPixels_[camera] = minPixels;
+}
+
+void ROS2SimulationManager::CompressImage(sensor_msgs::msg::Image& img, int quality)
+{
+    //The image goes through JPEG compression and back, like the frames of a camera that streams MJPEG
+    //(4:2:2 chroma subsampling, as used by UVC cameras), which leaves the artifacts of the compression in it
+    tjhandle compressor = tjInitCompress();
+    tjhandle decompressor = tjInitDecompress();
+    unsigned char* jpeg = nullptr;
+    unsigned long jpegSize = 0;
+    if(compressor != nullptr && decompressor != nullptr
+       && tjCompress2(compressor, img.data.data(), (int)img.width, (int)img.step, (int)img.height, TJPF_RGB, 
+                      &jpeg, &jpegSize, TJSAMP_422, quality, TJFLAG_FASTDCT) == 0)
+        tjDecompress2(decompressor, jpeg, jpegSize, img.data.data(), (int)img.width, (int)img.step, (int)img.height, TJPF_RGB, TJFLAG_FASTDCT);
+    if(jpeg != nullptr)
+        tjFree(jpeg);
+    if(compressor != nullptr)
+        tjDestroy(compressor);
+    if(decompressor != nullptr)
+        tjDestroy(decompressor);
+}
+
 rclcpp::Time ROS2SimulationManager::CaptureStamp(Camera* cam)
 {
     //On the simulation clock, images are stamped with the time their frame was captured, shared by all cameras
@@ -404,6 +436,8 @@ void ROS2SimulationManager::DestroyScenario()
     cameraMsgPrototypes_.clear();
     sonarMsgPrototypes_.clear();
     segmentationLabelsRevisions_.clear();
+    cameraJpegQuality_.clear();
+    segmentationMinPixels_.clear();
     rosRobots_.clear();
 
     SimulationManager::DestroyScenario();
@@ -1184,8 +1218,12 @@ void ROS2SimulationManager::ColorCameraImageReady(ColorCamera* cam)
     info->header.stamp = img->header.stamp;
 
     //Publishing (and compressing, for image_transport subscribers) is left to the image thread
-    PublishImageAsync(name, [this, name, img, info]()
+    auto jpeg = cameraJpegQuality_.find(name);
+    int jpegQuality = jpeg != cameraJpegQuality_.end() ? jpeg->second : 0;
+    PublishImageAsync(name, [this, name, img, info, jpegQuality]()
     {
+        if(jpegQuality > 0)
+            CompressImage(*img, jpegQuality);
         imgPubs_.at(name).publish(img);
         std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(name + "/info"))->publish(*info);
     });
@@ -1267,11 +1305,38 @@ void ROS2SimulationManager::SegmentationCameraImageReady(SegmentationCamera* cam
     sensor_msgs::msg::Image::SharedPtr img2 = CopyImage(*std::get<2>(prototypes), cam->GetDisplayDataPointer());
     img2->header.stamp = img->header.stamp;
 
-    PublishImageAsync(name, [this, name, img, info, img2]()
+    //Bounding boxes of the visible objects, e.g. to annotate the images of a paired camera
+    std::shared_ptr<vision_msgs::msg::Detection2DArray> boxes;
+    if(pubs_.find(name + "/boxes") != pubs_.end())
+    {
+        auto minPixels = segmentationMinPixels_.find(name);
+        std::vector<std::string> labels = GetSegmentationLabels();
+        boxes = std::make_shared<vision_msgs::msg::Detection2DArray>();
+        boxes->header = img->header;
+        for(const SegmentationBox& box : cam->ComputeBoundingBoxes(minPixels != segmentationMinPixels_.end() ? minPixels->second : 1))
+        {
+            vision_msgs::msg::Detection2D detection;
+            detection.header = img->header;
+            detection.id = box.id < labels.size() ? labels[box.id] : std::to_string(box.id);
+            detection.bbox.center.position.x = (double)(box.xMin + box.xMax + 1)/2.0;
+            detection.bbox.center.position.y = (double)(box.yMin + box.yMax + 1)/2.0;
+            detection.bbox.size_x = (double)(box.xMax - box.xMin + 1);
+            detection.bbox.size_y = (double)(box.yMax - box.yMin + 1);
+            vision_msgs::msg::ObjectHypothesisWithPose hypothesis;
+            hypothesis.hypothesis.class_id = detection.id;
+            hypothesis.hypothesis.score = 1.0;
+            detection.results.push_back(hypothesis);
+            boxes->detections.push_back(detection);
+        }
+    }
+
+    PublishImageAsync(name, [this, name, img, info, img2, boxes]()
     {
         imgPubs_.at(name).publish(img);
         std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(name + "/info"))->publish(*info);
         imgPubs_.at(name + "/display").publish(img2);
+        if(boxes != nullptr)
+            std::static_pointer_cast<rclcpp::Publisher<vision_msgs::msg::Detection2DArray>>(pubs_.at(name + "/boxes"))->publish(*boxes);
     });
 }
 

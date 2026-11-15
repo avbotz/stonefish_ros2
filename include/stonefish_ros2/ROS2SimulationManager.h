@@ -175,6 +175,8 @@ namespace sf
                         stonefish_ros2::srv::SonarSettings2::Response::SharedPtr res, MSIS* msis);
         
         void ThrustersCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg, ROS2Robot* robot);
+        void SetCameraJpegQuality(const std::string& camera, int quality);
+        void SetSegmentationMinPixels(const std::string& camera, unsigned int minPixels);
         void SupplyVoltageCallback(const std_msgs::msg::Float64::SharedPtr msg, ROS2Robot* robot);
         void PropellersCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg, ROS2Robot* robot);
         void RuddersCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg, ROS2Robot* robot);
@@ -195,6 +197,7 @@ namespace sf
         static sensor_msgs::msg::Image::SharedPtr CopyImage(const sensor_msgs::msg::Image& prototype, const void* data);
         rclcpp::Time CaptureStamp(Camera* cam);
         void PublishSegmentationLabels(const std::string& camera, const std_msgs::msg::Header& header);
+        static void CompressImage(sensor_msgs::msg::Image& img, int quality);
         void PublishImageAsync(const std::string& camera, std::function<void()> publish);
         void StartImageThread();
         void StopImageThread();
@@ -235,6 +238,8 @@ namespace sf
         std::unordered_map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, 
             sensor_msgs::msg::Image::SharedPtr>> sonarMsgPrototypes_;
         std::unordered_map<std::string, unsigned int> segmentationLabelsRevisions_; //Revision of the labels last published for each segmentation camera
+        std::unordered_map<std::string, int> cameraJpegQuality_; //Quality of the JPEG compression applied to the images of a camera (as in a camera streaming MJPEG)
+        std::unordered_map<std::string, unsigned int> segmentationMinPixels_; //Least visible pixels of an object in the bounding boxes published by a segmentation camera
         //Cameras whose images nobody subscribes to are not rendered (see UpdateCameraUse)
         rclcpp::TimerBase::SharedPtr cameraUseTimer_;
         std::mutex cameraUseMutex_;
