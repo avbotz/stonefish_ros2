@@ -741,11 +741,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                 {
                     case LinkActuatorType::PUSH:
                     {
-                        Push* push = static_cast<Push*>(actuator);    
-                        if(rosRobots_[i]->thrusterSetpointsChanged_)
-                        {
-                            push->SetForce(rosRobots_[i]->thrusterSetpoints_[thID++]);
-                        }
+                        Push* push = static_cast<Push*>(actuator); //Commanded through its own topic
 
                         auto it = pubs_.find(actuator->GetName());
                         if(publishState && it != pubs_.end())
