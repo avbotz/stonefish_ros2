@@ -823,6 +823,8 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                         {
                             th->SetSetpoint(rosRobots_[i]->thrusterSetpoints_[thID++]);
                         }
+                        if(rosRobots_[i]->supplyVoltageChanged_)
+                            th->SetSupplyVoltage(rosRobots_[i]->supplyVoltage_);
                             
                         auto it = pubs_.find(actuator->GetName()+"/wrench");
                         if(publishState && it != pubs_.end())
@@ -986,6 +988,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
 
         //Reset change flags
         rosRobots_[i]->thrusterSetpointsChanged_ = false;
+        rosRobots_[i]->supplyVoltageChanged_ = false;
         rosRobots_[i]->propellerSetpointsChanged_ = false;
         rosRobots_[i]->rudderSetpointsChanged_ = false;
     }
@@ -1614,6 +1617,12 @@ void ROS2SimulationManager::ThrustersCallback(const std_msgs::msg::Float64MultiA
     for(size_t i=0; i<robot->thrusterSetpoints_.size(); ++i)
         robot->thrusterSetpoints_[i] = msg->data[i];
     robot->thrusterSetpointsChanged_ = true;
+}
+
+void ROS2SimulationManager::SupplyVoltageCallback(const std_msgs::msg::Float64::SharedPtr msg, ROS2Robot* robot)
+{
+    robot->supplyVoltage_ = msg->data;
+    robot->supplyVoltageChanged_ = true;
 }
 
 void ROS2SimulationManager::PropellersCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg, ROS2Robot* robot)

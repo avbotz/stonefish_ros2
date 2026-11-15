@@ -60,6 +60,15 @@ The setpoints are expected to be published using a message of type ``std_msgs::m
         <ros_publisher thrusters="/my_thruster_state"/>
     </robot>
 
+The thrust of thrusters driven by open-loop speed controllers depends on the battery voltage. When their thrust models are defined for multiple supply voltages, the supply voltage of all thrusters of the robot [V] can be updated during the simulation, with messages of type ``std_msgs::msg::Float64`` sent to the topic defined by the optional attribute ``supply_voltage``:
+
+.. code-block:: xml
+
+    <robot>
+        <!-- thruster definitions here -->
+        <ros_subscriber thrusters="/my_thruster_setpoints" supply_voltage="/my_battery_voltage"/>
+    </robot>
+
 .. warning::
 
     When a robot is equipped both with servos and thrusters, the topic definitions have to be aggregated as attributes of the same ``ros_publisher`` and ``ros_subscriber`` tags.

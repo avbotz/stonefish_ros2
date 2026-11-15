@@ -338,6 +338,15 @@ bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
             subs[robot->GetName() + "/thrusters"] = nh_->create_subscription<std_msgs::msg::Float64MultiArray>(std::string(topicThrust), 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
         }
 
+        //Supply (battery) voltage of the thrusters, used by thrust models defined for multiple voltages
+        const char* topicVoltage = nullptr;
+        if(nThrusters > 0 && item->QueryStringAttribute("supply_voltage", &topicVoltage) == XML_SUCCESS)
+        {
+            std::function<void(const std_msgs::msg::Float64::SharedPtr msg)> callbackFunc =
+                        std::bind(&ROS2SimulationManager::SupplyVoltageCallback, sim, _1, ros2Robot.get());
+            subs[robot->GetName() + "/supply_voltage"] = nh_->create_subscription<std_msgs::msg::Float64>(std::string(topicVoltage), 10, callbackFunc, sim->GetSetpointSubscriptionOptions());
+        }
+
         if(nPropellers > 0 && item->QueryStringAttribute("propellers", &topicProp) == XML_SUCCESS)
         {
             std::function<void(const std_msgs::msg::Float64MultiArray::SharedPtr msg)> callbackFunc =

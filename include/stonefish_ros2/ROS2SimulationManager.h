@@ -96,10 +96,13 @@ namespace sf
         bool rudderSetpointsChanged_;
         bool respawnRequested_;
         Transform respawnOrigin_;
+        Scalar supplyVoltage_; //Supply voltage of the thrusters [V]
+        bool supplyVoltageChanged_;
 
 		ROS2Robot(Robot* robot, unsigned int nThrusters, unsigned int nPropellers, unsigned int nRudders=0)
 			: robot_(robot), publishBaseLinkTransform_(false), thrusterSetpointsChanged_(false), 
-            propellerSetpointsChanged_(false), rudderSetpointsChanged_(false), respawnRequested_(false)
+            propellerSetpointsChanged_(false), rudderSetpointsChanged_(false), respawnRequested_(false),
+            supplyVoltage_(0), supplyVoltageChanged_(false)
 		{
 			thrusterSetpoints_ = std::vector<Scalar>(nThrusters, Scalar(0));
 			propellerSetpoints_ = std::vector<Scalar>(nPropellers, Scalar(0));
@@ -172,6 +175,7 @@ namespace sf
                         stonefish_ros2::srv::SonarSettings2::Response::SharedPtr res, MSIS* msis);
         
         void ThrustersCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg, ROS2Robot* robot);
+        void SupplyVoltageCallback(const std_msgs::msg::Float64::SharedPtr msg, ROS2Robot* robot);
         void PropellersCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg, ROS2Robot* robot);
         void RuddersCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg, ROS2Robot* robot);
         void ServosCallback(const sensor_msgs::msg::JointState::SharedPtr msg, ROS2Robot* robot);
