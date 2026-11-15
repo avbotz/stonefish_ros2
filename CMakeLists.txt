@@ -95,6 +95,7 @@ ament_export_dependencies(
   nav_msgs
   visualization_msgs
   sensor_msgs
+  vision_msgs
   rosgraph_msgs
   pcl_conversions
   image_transport
