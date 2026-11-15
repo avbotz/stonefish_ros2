@@ -39,6 +39,7 @@ namespace sf
     class IMU;
     class Pressure;
     class DVL;
+    class Sample;
     class GPS;
     class INS;
     class Odometry;
@@ -63,6 +64,8 @@ namespace sf
     {
     public:
         ROS2Interface(const std::shared_ptr<rclcpp::Node> nh, const rclcpp::Clock::SharedPtr clock);
+        //! Time at which a measurement was taken, on the clock used to stamp messages.
+        rclcpp::Time SampleStamp(const Sample& s) const;
         void PublishTF(std::unique_ptr<tf2_ros::TransformBroadcaster>& br, const sf::Transform& T, const rclcpp::Time& t, const std::string &frame_id, const std::string &child_frame_id) const;
         void PublishAccelerometer(rclcpp::PublisherBase::SharedPtr pub, Accelerometer* acc) const;
         void PublishGyroscope(rclcpp::PublisherBase::SharedPtr pub, Gyroscope* gyro) const;

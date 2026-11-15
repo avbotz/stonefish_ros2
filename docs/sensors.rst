@@ -27,6 +27,8 @@ Moreover, an additional functionality is available - an automatically generated 
 
 The above service is of type ``std_srvs::srv::SetBool``.
 
+The messages of the joint and link sensors are stamped with the time at which the measurement was taken. For a sensor defined with a ``latency`` it is earlier than the time of publishing, like for a real device that reports the time of validity of its data.
+
 Joint sensors
 =============
 
@@ -72,6 +74,8 @@ Doppler velocity log (DVL)
 --------------------------
 
 Message type: ``stonefish_ros2::msg::DVL``
+
+The message contains the state of the four beams: the measured range and velocity along the beam, or a negative range and covariance if the beam did not return a usable echo. Without a bottom lock (less than three valid beams) the velocity is zero, and the altitude and the diagonal of the velocity covariance are set to -1.
 
 Second message type (*altitude_topic*): ``sensor_msgs::msg::Range``
 

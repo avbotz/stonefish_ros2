@@ -87,6 +87,23 @@ ROS2Interface::ROS2Interface(const std::shared_ptr<rclcpp::Node> nh, const rclcp
 {
 }
 
+rclcpp::Time ROS2Interface::SampleStamp(const Sample& s) const
+{
+    //A measurement is stamped with the time it was taken, which is before it becomes available when the sensor has latency.
+    //A measurement that has just been taken (one simulation step ago) is stamped with the current time.
+    rclcpp::Time now = clock_->now();
+    if(s.GetTimestamp() < Scalar(0))
+        return now;
+    SimulationManager* sim = SimulationApp::GetApp()->GetSimulationManager();
+    Scalar age = sim->GetSimulationTime(true) - s.GetTimestamp() - Scalar(1)/sim->GetStepsPerSecond();
+    if(age < Scalar(1e-6))
+        return now;
+    rcl_duration_value_t ageNs = (rcl_duration_value_t)std::llround(age * Scalar(1e9));
+    if(ageNs >= now.nanoseconds())
+        return rclcpp::Time(0, 0, now.get_clock_type());
+    return now - rclcpp::Duration(std::chrono::nanoseconds(ageNs));
+}
+
 void ROS2Interface::PublishTF(std::unique_ptr<tf2_ros::TransformBroadcaster>& br, const sf::Transform& T, const rclcpp::Time& t, const std::string &frame_id, const std::string &child_frame_id) const
 {
     sf::Vector3 o = T.getOrigin();
@@ -113,7 +130,7 @@ void ROS2Interface::PublishAccelerometer(rclcpp::PublisherBase::SharedPtr pub, A
                                           acc->GetSensorChannelDescription(1).stdDev,
                                           acc->GetSensorChannelDescription(2).stdDev);
     geometry_msgs::msg::AccelWithCovarianceStamped msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = acc->GetName();
     msg.accel.accel.linear.x = s.GetValue(0);
     msg.accel.accel.linear.y = s.GetValue(1);
@@ -131,7 +148,7 @@ void ROS2Interface::PublishGyroscope(rclcpp::PublisherBase::SharedPtr pub, Gyros
                                       gyro->GetSensorChannelDescription(1).stdDev,
                                       gyro->GetSensorChannelDescription(2).stdDev);
     geometry_msgs::msg::TwistWithCovarianceStamped msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = gyro->GetName();
     msg.twist.twist.angular.x = s.GetValue(0);
     msg.twist.twist.angular.y = s.GetValue(1);
@@ -158,7 +175,7 @@ void ROS2Interface::PublishIMU(rclcpp::PublisherBase::SharedPtr pub, IMU* imu) c
                                         imu->GetSensorChannelDescription(8).stdDev);
     //Variance is sigma^2!
     sensor_msgs::msg::Imu msg;
-    msg.header.stamp = clock_->now();    
+    msg.header.stamp = SampleStamp(s);    
     msg.header.frame_id = imu->GetName();
     msg.orientation.x = quat.x();
     msg.orientation.y = quat.y();
@@ -186,7 +203,7 @@ void ROS2Interface::PublishPressure(rclcpp::PublisherBase::SharedPtr pub, Pressu
 {
     Sample s = press->GetLastSample();
     sensor_msgs::msg::FluidPressure msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = press->GetName();
     msg.fluid_pressure = s.GetValue(0);
     msg.variance = press->GetSensorChannelDescription(0).stdDev;
@@ -199,19 +216,45 @@ void ROS2Interface::PublishDVL(rclcpp::PublisherBase::SharedPtr pub, DVL* dvl) c
     //Get data
     Sample s = dvl->GetLastSample();
     unsigned short status = (unsigned short)trunc(s.GetValue(7));
-    sf::Scalar vVariance = dvl->GetSensorChannelDescription(0).stdDev;
+    bool bottomLock = status == 0 || status == 2;
+    //Noise of the horizontal velocity; the vertical one is lower because of the geometry of the beams
+    sf::Scalar vVariance = dvl->GetVelocityStdDev();
     vVariance *= vVariance; //Variance is square of standard deviation
+    sf::Scalar vzVariance = vVariance * btTan(dvl->GetBeamAngle()) * btTan(dvl->GetBeamAngle())/sf::Scalar(2);
     //Publish DVL message
     stonefish_ros2::msg::DVL msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = dvl->GetName();
     msg.velocity.x = s.GetValue(0);
     msg.velocity.y = s.GetValue(1);
     msg.velocity.z = s.GetValue(2);
-    msg.velocity_covariance[0] = vVariance;
-    msg.velocity_covariance[4] = vVariance;
-    msg.velocity_covariance[8] = vVariance;
-    msg.altitude = (status == 0 || status == 2) ? s.GetValue(3) : -1.0;
+    //Without a bottom lock (less than three valid beams) the velocity is not measured
+    msg.velocity_covariance[0] = bottomLock ? vVariance : -1.0;
+    msg.velocity_covariance[4] = bottomLock ? vVariance : -1.0;
+    msg.velocity_covariance[8] = bottomLock ? vzVariance : -1.0;
+    msg.altitude = bottomLock ? s.GetValue(3) : -1.0;
+    //Beams (of the measurement taken last, which with latency is newer than the published sample)
+    sf::Scalar beamVariance = sf::Scalar(2) * vVariance * btSin(dvl->GetBeamAngle()) * btSin(dvl->GetBeamAngle());
+    sf::Scalar rangeVariance = dvl->GetSensorChannelDescription(3).stdDev;
+    rangeVariance *= rangeVariance;
+    msg.beams.resize(4);
+    for(unsigned int i=0; i<4; ++i)
+    {
+        stonefish_ros2::msg::DVLBeam& beam = msg.beams[i];
+        bool valid = dvl->IsBeamValid(i);
+        beam.range = valid ? dvl->GetBeamRange(i) : -1.0;
+        beam.range_covariance = valid ? rangeVariance : -1.0;
+        beam.velocity = valid ? dvl->GetBeamVelocity(i) : 0.0;
+        beam.velocity_covariance = valid ? beamVariance : -1.0;
+        //The beam points along the x axis of its frame
+        sf::Vector3 dir = dvl->GetBeamDirection(i);
+        sf::Quaternion q = shortestArcQuat(sf::Vector3(1,0,0), dir);
+        beam.pose.header = msg.header;
+        beam.pose.pose.orientation.x = q.x();
+        beam.pose.pose.orientation.y = q.y();
+        beam.pose.pose.orientation.z = q.z();
+        beam.pose.pose.orientation.w = q.w();
+    }
     std::static_pointer_cast<rclcpp::Publisher<stonefish_ros2::msg::DVL>>(pub)->publish(msg);
 }
 
@@ -226,7 +269,7 @@ void ROS2Interface::PublishDVLAltitude(rclcpp::PublisherBase::SharedPtr pub, DVL
     sf::Scalar beamAngle = dvl->GetBeamAngle();
     //Publish range message
     sensor_msgs::msg::Range msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = dvl->GetName() + "_altitude";
     msg.radiation_type = msg.ULTRASOUND;
     msg.field_of_view = beamAngle*2;
@@ -241,7 +284,7 @@ void ROS2Interface::PublishGPS(rclcpp::PublisherBase::SharedPtr pub, GPS* gps) c
     Sample s = gps->GetLastSample();
 
     sensor_msgs::msg::NavSatFix msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = gps->GetName();
     msg.status.service = msg.status.SERVICE_GPS;
 
@@ -270,7 +313,7 @@ void ROS2Interface::PublishOdometry(rclcpp::PublisherBase::SharedPtr pub, Odomet
 {
     Sample s = odom->GetLastSample();
     nav_msgs::msg::Odometry msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = "world_ned";
     msg.child_frame_id = odom->GetName();
     msg.pose.pose.position.x = s.GetValue(0);
@@ -296,7 +339,7 @@ void ROS2Interface::PublishINS(rclcpp::PublisherBase::SharedPtr pub, INS* ins) c
 
     Sample s = ins->GetLastSample();
     stonefish_ros2::msg::INS msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = ins->GetName();
     msg.latitude = s.GetValue(4);
     msg.longitude = s.GetValue(5);
@@ -322,7 +365,7 @@ void ROS2Interface::PublishINSOdometry(rclcpp::PublisherBase::SharedPtr pub, INS
 {
     Sample s = ins->GetLastSample();
     nav_msgs::msg::Odometry msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = "world_ned";
     msg.child_frame_id = ins->GetName();
     msg.pose.pose.position.x = s.GetValue(0);
@@ -346,7 +389,7 @@ void ROS2Interface::PublishForceTorque(rclcpp::PublisherBase::SharedPtr pub, For
 {
     Sample s = ft->GetLastSample();    
     geometry_msgs::msg::WrenchStamped msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = ft->GetName();
     msg.wrench.force.x = s.GetValue(0);
     msg.wrench.force.y = s.GetValue(1);
@@ -361,7 +404,7 @@ void ROS2Interface::PublishEncoder(rclcpp::PublisherBase::SharedPtr pub, RotaryE
 {
     Sample s = enc->GetLastSample();
     sensor_msgs::msg::JointState msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(s);
     msg.header.frame_id = enc->GetName();
     msg.name.resize(1);
     msg.position.resize(1);
@@ -382,7 +425,7 @@ void ROS2Interface::PublishMultibeam(rclcpp::PublisherBase::SharedPtr pub, Multi
     size_t angSteps = distances.size();
 
     sensor_msgs::msg::LaserScan msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(sample);
     msg.header.frame_id = mb->GetName();
     
     msg.angle_min = -angRange/sf::Scalar(2); // start angle of the scan [rad]
@@ -442,7 +485,7 @@ void ROS2Interface::PublishMultibeamPCL(rclcpp::PublisherBase::SharedPtr pub, Mu
     pcl::toPCLPointCloud2(*cloud, pclMsg);
 
     sensor_msgs::msg::PointCloud2 msg;
-    msg.header.stamp = clock_->now();
+    msg.header.stamp = SampleStamp(sample);
     msg.header.frame_id = mb->GetName();
     pcl_conversions::fromPCL(pclMsg, msg);
     
