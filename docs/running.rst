@@ -24,6 +24,13 @@ The simulation clock of both simulators is controlled with the following ROS par
 * publish_clock - if ``true``, the simulation time is published on the ``/clock`` topic and used to stamp all messages, so that other nodes can follow it with ``use_sim_time:=true`` (default: ``false``, messages are stamped with the system time)
 * realtime_factor - the speed of the simulation relative to real time, e.g. 0.5 runs at half speed (default: 1.0); it can also be changed while the simulation is running, using ``ros2 param set``
 
+The following ROS parameters, set at startup, make the simulation repeatable and independent of the speed of the computer:
+
+* seed - the seed of all random number generators of the simulator, e.g. of the sensor noise; a negative value gives different random numbers in every run (default: -1)
+* lock_step - if ``true``, the simulation waits for the renderer and for the publishing of the images, so that every frame of every camera shows the state of the simulation at the time it was due and none is skipped; the simulation then runs slower than real time when the computer cannot keep up (default: ``false``, frames are skipped instead)
+* offscreen - if ``true``, the graphical simulator renders without a window and only the cameras are rendered, so that no display is needed, e.g. in automated tests; software rendering can be used by setting ``LIBGL_ALWAYS_SOFTWARE=1`` (default: ``false``)
+* start_paused - if ``true``, the simulation starts paused (default: ``false``)
+
 Another option is to include the provided ``launch/stonefish_simulator.launch.py`` file in your own launch file. It is necessary to override the default arguments. See an example below:
 
 .. code-block:: python
@@ -102,6 +109,10 @@ Implemented services
 ====================
 
 Some functionality of the simulator node is available through ROS2 services:
+
+* ``pause`` - pause (``true``) or continue (``false``) the simulation (type *std_srvs::srv::SetBool*)
+
+* ``step`` - advance a paused simulation by a number of steps, as fast as possible (type *stonefish_ros2::srv::Step*); the call returns at once, with the simulation time at which the steps will be complete, which can be awaited on the ``/clock`` topic
 
 * ``enable_currents`` - enable simulation of ocean currents (type *std_srvs::srv::Trigger*)
 

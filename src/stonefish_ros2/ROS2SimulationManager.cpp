@@ -24,6 +24,7 @@
 //
 
 #include "stonefish_ros2/ROS2SimulationManager.h"
+#include <algorithm>
 #include "stonefish_ros2/ROS2ScenarioParser.h"
 #include "stonefish_ros2/ROS2Interface.h"
 #include "stonefish_ros2/ROS2SensorPluginInterface.h"
@@ -116,6 +117,15 @@ ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string 
     else
         clock_ = nh_->get_clock();
 
+    //Repeatable simulation: the same random numbers in every run and every frame of the cameras rendered at the
+    //step in which it is due and published, however slow the computer is (the simulation waits for the renderer)
+    int64_t seed = nh_->declare_parameter("seed", (int64_t)-1);
+    if(seed >= 0)
+        SimulationManager::SetRandomSeed((unsigned int)seed);
+    lockStep_ = nh_->declare_parameter("lock_step", false);
+    if(nh_->declare_parameter("start_paused", false))
+        SetPaused(true);
+
     //Robot state (TF, joints, actuators) and /clock are published from the physics thread, and each message
     //costs per subscriber. Publishing them every step (0) is rarely needed: the controllers run far slower.
     //The rate is rounded to a whole number of steps. Message stamps stay exact, as the clock advances every step.
@@ -161,9 +171,10 @@ void ROS2SimulationManager::StartImageThread()
             if(stopImageThread_)
                 return;
 
-            std::map<std::string, std::function<void()>> images;
+            std::deque<std::pair<std::string, std::function<void()>>> images;
             images.swap(pendingImages_);
             lock.unlock();
+            imageCondition_.notify_all(); //There is room for new frames
             for(auto& image : images)
             {
                 try
@@ -187,7 +198,7 @@ void ROS2SimulationManager::StopImageThread()
         stopImageThread_ = true;
         pendingImages_.clear();
     }
-    imageCondition_.notify_one();
+    imageCondition_.notify_all();
     if(imageThread_.joinable())
         imageThread_.join();
 }
@@ -195,10 +206,26 @@ void ROS2SimulationManager::StopImageThread()
 void ROS2SimulationManager::PublishImageAsync(const std::string& camera, std::function<void()> publish)
 {
     {
-        std::lock_guard<std::mutex> lock(imageMutex_);
-        pendingImages_[camera] = std::move(publish); //Replaces a frame not yet published, which is stale by now
+        std::unique_lock<std::mutex> lock(imageMutex_);
+        if(lockStep_)
+        {
+            //Every frame is published: the renderer, and with it the simulation, waits when publishing cannot keep up
+            imageCondition_.wait(lock, [this]{ return stopImageThread_ || pendingImages_.size() < 8; });
+            if(stopImageThread_)
+                return;
+            pendingImages_.emplace_back(camera, std::move(publish));
+        }
+        else
+        {
+            auto pending = std::find_if(pendingImages_.begin(), pendingImages_.end(), 
+                [&camera](const std::pair<std::string, std::function<void()>>& image) { return image.first == camera; });
+            if(pending != pendingImages_.end())
+                pending->second = std::move(publish); //Replaces a frame not yet published, which is stale by now
+            else
+                pendingImages_.emplace_back(camera, std::move(publish));
+        }
     }
-    imageCondition_.notify_one();
+    imageCondition_.notify_all();
 }
 
 sensor_msgs::msg::Image::SharedPtr ROS2SimulationManager::CopyImage(const sensor_msgs::msg::Image& prototype, const void* data)
@@ -348,6 +375,8 @@ void ROS2SimulationManager::BuildScenario()
     srvs_["enable_currents"] = nh_->create_service<std_srvs::srv::Trigger>("enable_currents", std::bind(&ROS2SimulationManager::EnableCurrentsService, this, _1, _2));
     srvs_["disable_currents"] = nh_->create_service<std_srvs::srv::Trigger>("disable_currents", std::bind(&ROS2SimulationManager::DisableCurrentsService, this, _1, _2));
     srvs_["respawn_robot"] = nh_->create_service<stonefish_ros2::srv::Respawn>("respawn_robot", std::bind(&ROS2SimulationManager::RespawnRobotService, this, _1, _2));
+    srvs_["pause"] = nh_->create_service<std_srvs::srv::SetBool>("pause", std::bind(&ROS2SimulationManager::PauseService, this, _1, _2));
+    srvs_["step"] = nh_->create_service<stonefish_ros2::srv::Step>("step", std::bind(&ROS2SimulationManager::StepService, this, _1, _2));
 
     // Cameras nobody subscribes to are not rendered
     cameraUseTimer_ = nh_->create_wall_timer(std::chrono::milliseconds(500), std::bind(&ROS2SimulationManager::UpdateCameraUse, this));
@@ -385,7 +414,8 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
     (void)timeStep; // Suppress warning
 
     //Setpoints are applied every step, robot state is only published every stateDivider_ steps
-    bool publishState = stepCounter_++ % stateDivider_ == 0;
+    //and after the last of the steps requested from a paused simulation, so that its end can be observed
+    bool publishState = stepCounter_++ % stateDivider_ == 0 || (IsPaused() && GetRequestedSteps() == 0);
 
     ////////////////////////////////////////CLOCK////////////////////////////////////////////////
     if(clockPub_ != nullptr)
@@ -1345,6 +1375,31 @@ void ROS2SimulationManager::DisableCurrentsService(const std_srvs::srv::Trigger:
     res->success = true;
 }
 
+void ROS2SimulationManager::PauseService(const std_srvs::srv::SetBool::Request::SharedPtr req, 
+                                           std_srvs::srv::SetBool::Response::SharedPtr res)
+{
+    SetPaused(req->data);
+    res->message = req->data ? "Simulation paused." : "Simulation running.";
+    res->success = true;
+}
+
+void ROS2SimulationManager::StepService(const stonefish_ros2::srv::Step::Request::SharedPtr req, 
+                                           stonefish_ros2::srv::Step::Response::SharedPtr res)
+{
+    if(!IsPaused())
+    {
+        res->time = GetSimulationTime();
+        res->message = "Only a paused simulation can be stepped.";
+        res->success = false;
+        return;
+    }
+    //The steps are simulated by the simulation thread, as fast as possible
+    res->time = GetSimulationTime() + (Scalar)(GetRequestedSteps() + req->steps)/GetStepsPerSecond();
+    RequestSteps(req->steps);
+    res->message = "Stepping the simulation.";
+    res->success = true;
+}
+
 void ROS2SimulationManager::RespawnRobotService(const stonefish_ros2::srv::Respawn::Request::SharedPtr req, 
                              stonefish_ros2::srv::Respawn::Response::SharedPtr res)
 {
@@ -1698,10 +1753,11 @@ rcl_interfaces::msg::SetParametersResult ROS2SimulationManager::ParametersCallba
     //Validate all parameters before applying any
     for(const rclcpp::Parameter& p : params)
     {
-        if(p.get_name() == "publish_clock")
+        if(p.get_name() == "publish_clock" || p.get_name() == "seed" || p.get_name() == "lock_step" 
+           || p.get_name() == "start_paused" || p.get_name() == "offscreen")
         {
             res.successful = false;
-            res.reason = "Parameter 'publish_clock' can only be set at startup.";
+            res.reason = "Parameter '" + p.get_name() + "' can only be set at startup.";
             return res;
         }
         else if(p.get_name() == "realtime_factor" && p.as_double() <= 0.0)

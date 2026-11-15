@@ -26,6 +26,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -49,6 +50,7 @@
 #include "stonefish_ros2/srv/sonar_settings.hpp"
 #include "stonefish_ros2/srv/sonar_settings2.hpp"
 #include "stonefish_ros2/srv/respawn.hpp"
+#include "stonefish_ros2/srv/step.hpp"
 
 #include <Stonefish/core/SimulationManager.h>
 #include <Stonefish/actuators/Servo.h>
@@ -144,6 +146,10 @@ namespace sf
                              std_srvs::srv::Trigger::Response::SharedPtr res);
         void RespawnRobotService(const stonefish_ros2::srv::Respawn::Request::SharedPtr req, 
                              stonefish_ros2::srv::Respawn::Response::SharedPtr res);
+        void PauseService(const std_srvs::srv::SetBool::Request::SharedPtr req, 
+                            std_srvs::srv::SetBool::Response::SharedPtr res);
+        void StepService(const stonefish_ros2::srv::Step::Request::SharedPtr req, 
+                            stonefish_ros2::srv::Step::Response::SharedPtr res);
         void UniformVFCallback(const geometry_msgs::msg::Vector3::SharedPtr msg, Uniform* vf);
         void JetVFCallback(const std_msgs::msg::Float64::SharedPtr msg, Jet* vf);
         void ActuatorOriginCallback(const geometry_msgs::msg::Transform::SharedPtr msg, LinkActuator* act);
@@ -210,8 +216,9 @@ namespace sf
         std::thread imageThread_;
         std::mutex imageMutex_;
         std::condition_variable imageCondition_;
-        std::map<std::string, std::function<void()>> pendingImages_; //Latest unpublished frame of each camera
+        std::deque<std::pair<std::string, std::function<void()>>> pendingImages_; //Unpublished frames (the latest of each camera, or all of them in lock step)
         bool stopImageThread_;
+        bool lockStep_; //Every frame of the cameras is published and the simulation waits for it
         std::shared_ptr<ROS2Interface> interface_;
         std::unordered_map<std::string, rclcpp::ServiceBase::SharedPtr> srvs_;
         std::unordered_map<std::string, rclcpp::PublisherBase::SharedPtr> pubs_;

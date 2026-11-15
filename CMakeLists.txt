@@ -48,6 +48,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SonarSettings.srv"
   "srv/SonarSettings2.srv"
   "srv/Respawn.srv"
+  "srv/Step.srv"
   DEPENDENCIES std_msgs std_srvs geometry_msgs
 )
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)

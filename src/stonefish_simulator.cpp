@@ -40,10 +40,16 @@ public:
                            sf::Scalar rate) 
                            : Node("stonefish_simulator")
     {   
+        // Without a window only the cameras are rendered, and no display is needed
+        sf::RenderSettings settings = s;
+        settings.offscreen = this->declare_parameter("offscreen", false);
+
         // The app owns the manager, so its node handle must not own this node.
-        app_ = std::make_unique<sf::ROS2GraphicalSimulationApp>("Stonefish Simulator", dataPath, s, h,
+        app_ = std::make_unique<sf::ROS2GraphicalSimulationApp>("Stonefish Simulator", dataPath, settings, h,
             std::make_unique<sf::ROS2SimulationManager>(rate, scenarioPath,
                 std::shared_ptr<rclcpp::Node>(this, [](rclcpp::Node*) {})));
+        // The simulation waits for the frames of the cameras (parameter declared by the manager)
+        app_->SetLockStep(this->get_parameter("lock_step").as_bool());
         app_->Startup();
         //Ticks that have nothing to render return at once (the app renders on demand), so a short period picks up
         //each sensor camera as soon as it is due, instead of at the next 60 Hz frame

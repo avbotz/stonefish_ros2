@@ -1,0 +1,8 @@
+# Advances a paused simulation by a number of steps, as fast as possible.
+# The call returns at once: the steps are complete when the simulation time
+# (published on /clock) reaches the returned time.
+uint32 steps
+---
+bool success
+float64 time # Simulation time at which the requested steps will be complete [s]
+string message
